@@ -22,9 +22,12 @@
 package services.pet;
 
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.LongAdder;
+
+import org.apache.commons.collections.CollectionUtils;
 
 import protocol.swg.UpdateContainmentMessage;
 import main.NGECore;
@@ -36,6 +39,7 @@ import resources.datatables.State;
 import resources.objects.building.BuildingObject;
 import resources.objects.creature.CreatureObject;
 import resources.objects.player.PlayerObject;
+import tools.DevLog;
 import engine.clientdata.ClientFileManager;
 import engine.clientdata.visitors.DatatableVisitor;
 import engine.resources.container.Traverser;
@@ -215,7 +219,9 @@ public class MountService implements INetworkDispatch {
 			return;
 		}
 		
+		core.petService.storeAll(actor);
 		storeAll(actor);
+		
 		
 		player.setCallingCompanion(true);
 		
@@ -250,6 +256,7 @@ public class MountService implements INetworkDispatch {
 							mount.setPosition(actor.getPosition().clone());
 							mount.setOrientation(actor.getOrientation().clone());
 							mount.setPlanet(actor.getPlanet());
+							DevLog.debugout("Charon", "Mount Service", "PROCESS MOUNT " + mount.getTemplate()); 
 							core.simulationService.add(mount, actor.getWorldPosition().x, actor.getWorldPosition().z, false);
 						}
 					}
@@ -259,6 +266,25 @@ public class MountService implements INetworkDispatch {
 		});
 		
 		player.setCallingCompanion(false);
+		
+		// Make the vehicle visible
+		
+		List<SWGObject> newAwareObjects = core.simulationService.get(actor.getPlanet(), actor.getWorldPosition().x, actor.getWorldPosition().z, 512);
+		ArrayList<SWGObject> oldAwareObjects = new ArrayList<SWGObject>(actor.getAwareObjects());
+		@SuppressWarnings("unchecked") Collection<SWGObject> updateAwareObjects = CollectionUtils.intersection(oldAwareObjects, newAwareObjects);
+		
+		for(int i = 0; i < newAwareObjects.size(); i++) {
+			SWGObject obj = newAwareObjects.get(i);
+			//System.out.println(obj.getTemplate());
+			if(!updateAwareObjects.contains(obj) && obj != actor && !actor.getAwareObjects().contains(obj) &&  obj.getContainer() != actor && obj.isInQuadtree()) {						
+				if(obj.getAttachment("bigSpawnRange") == null && obj.getWorldPosition().getDistance2D(actor.getWorldPosition()) > 200)
+					continue;						
+				actor.makeAware(obj);
+				if(obj.getClient() != null)
+					obj.makeAware(actor);
+			}
+		}
+		
 	}
 	
 	private void callMount(CreatureObject actor, SWGObject pcd, PlayerObject player, CreatureObject mount) {
@@ -652,6 +678,11 @@ public class MountService implements INetworkDispatch {
 	 * Judging by the fact pcds have inventories and many other things don't.
 	 */
 	public void store(CreatureObject storer, CreatureObject mount) {
+		if (mount == null) {
+			System.err.println("MountService:store(): mount is null; this should never be the case.");
+			return;
+		}
+		
 		if (mount.getContainer() != null) {
 			return;
 		}
@@ -674,8 +705,9 @@ public class MountService implements INetworkDispatch {
 		}
 		
 		if (isMounted(owner, mount)) {
-			storer.sendSystemMessage(OutOfBand.ProsePackage("@pet/pet_menu:must_dismount"), DisplayType.Broadcast);
-			return;
+			//storer.sendSystemMessage(OutOfBand.ProsePackage("@pet/pet_menu:must_dismount"), DisplayType.Broadcast);
+			//return;
+			dismount(storer, mount);
 		}
 		
 		if (owner.getTefTime() > 0) {
@@ -780,5 +812,5 @@ public class MountService implements INetworkDispatch {
 	public void shutdown() {
 		
 	}
-	
+
 }

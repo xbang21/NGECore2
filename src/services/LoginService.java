@@ -44,10 +44,10 @@ import engine.resources.service.INetworkRemoteEvent;
 import engine.resources.service.LocalDbLoginProvider;
 import engine.resources.service.VBLoginProvider;
 import protocol.swg.CharacterCreationDisabled;
-import protocol.swg.ClientUIErrorMessage;
 import protocol.swg.DeleteCharacterMessage;
 import protocol.swg.DeleteCharacterReplyMessage;
 import protocol.swg.EnumerateCharacterId;
+import protocol.swg.ErrorMessage;
 import protocol.swg.LoginClientId;
 import protocol.swg.LoginClientToken;
 import protocol.swg.LoginClusterStatus;
@@ -56,6 +56,7 @@ import protocol.swg.ServerNowEpochTime;
 import protocol.swg.StationIdHasJediSlot;
 import resources.common.*;
 import resources.datatables.PlayerFlags;
+import resources.guild.Guild;
 import resources.objects.creature.CreatureObject;
 
 @SuppressWarnings("unused")
@@ -92,6 +93,11 @@ public class LoginService implements INetworkDispatch{
 
 			public void handlePacket(IoSession session, IoBuffer data) throws Exception {
 				
+				if (session == null) {
+					System.out.println("Login attempted with NULL session!");
+					return;
+				}
+				
 				data = data.order(ByteOrder.LITTLE_ENDIAN);
 				LoginClientId clientID = new LoginClientId();
 				data.position(0);
@@ -116,15 +122,18 @@ public class LoginService implements INetworkDispatch{
 							err = "user is banned";
 							break;
 					}
-					ClientUIErrorMessage errMsg = new ClientUIErrorMessage("Invalid Login", err);
+					
+					// No matter what, this will always show that the login server is unavailable at this time. Removing the error message will just keep the connecting message up.
+					ErrorMessage errMsg = new ErrorMessage("Wrong Password", "The username or password you entered was incorrect.");
 					session.write(errMsg.serialize());
+					
 					Disconnect disconnect = new Disconnect((Integer)session.getAttribute("connectionId"), 6);
 					session.write(disconnect);
-					session.close(false);
+					
+					// Closing the session for some reason will not show any error messages, even if write messages are queued.. 
+					//As result, the infinite "Connection to the login server is now open..." loop., also it randomly denies any logins from that client for some reason
 					return;
 				}
-				
-				System.out.println(user + " successfully logged in.");
 				
 				Client client = new Client(session.getRemoteAddress());
 				client.setAccountName(user);
@@ -137,6 +146,16 @@ public class LoginService implements INetworkDispatch{
 				
 				core.addClient(session, client);
 				
+				if (!core.getActiveConnectionsMap().containsKey(session)) {
+					Disconnect disconnect = new Disconnect((Integer)session.getAttribute("connectionId"), 6);
+					session.write(disconnect);
+					ErrorMessage errMsg = new ErrorMessage("Error Logging In", "Your client could not be added to the connections at this time.");
+					session.write(errMsg.serialize());
+					session.close(false);
+					
+					System.out.println(client.getAccountName() + " was not added to active connections map.");
+					return;				
+				}
 				/*if(!checkIfAccountExistInGameDB(id)) {
 					createAccountForGameDB(id, user, email, encryptPass);
 				}*/
@@ -153,9 +172,7 @@ public class LoginService implements INetworkDispatch{
 				ServerNowEpochTime time = new ServerNowEpochTime((int) (System.currentTimeMillis() / 1000));
 				
 				if (client.getSession().containsAttribute("tradeSession") == true) {
-					System.out.println("Has attribute: " + session.getAttribute("tradeSession").toString());
 					client.getSession().removeAttribute("tradeSession");
-					System.out.println("Removed tradeSession Attribute @ LoginService.java");
 				}
 				
 				session.write(time.serialize());
@@ -165,6 +182,8 @@ public class LoginService implements INetworkDispatch{
 				session.write(serverStatus.serialize());
 				session.write(jediSlot.serialize());
 				session.write(characters.serialize());
+				
+				System.out.println(user + " successfully logged in.");
 			}
 
 		});
@@ -193,6 +212,9 @@ public class LoginService implements INetworkDispatch{
                 		if(!resultSet) {
                 			CreatureObject object = (CreatureObject) core.objectService.getObject(packet.getcharId());
                 			
+                			if (object == null)
+                				object = (CreatureObject) core.objectService.getCreatureFromDB(packet.getcharId());
+                			
                 			if (object != null) {
                 				if (object.isInQuadtree() && object.getClient() != null) {
                 					core.connectionService.disconnect(object.getClient());
@@ -200,6 +222,21 @@ public class LoginService implements INetworkDispatch{
                 				
                 				if (object.isInQuadtree()) {
                 					core.simulationService.remove(object, object.getPosition().x, object.getPosition().z, true);
+                					if (core.missionService.getBountyListItem(object.getObjectID()) != null) {
+                						core.missionService.removeBounty(object.getObjectID(), true);
+                					}
+                				} else {
+                					if (core.getBountiesODB().contains(object.getObjectID())) 
+                						core.getBountiesODB().remove(object.getObjectID());
+                				}
+                				
+                				if (object.getGuildId() != 0)
+                					core.guildService.getGuildById(object.getGuildId()).getMembers().remove(object.getObjectID());
+                				
+                				Guild guild = core.guildService.getGuildById(((CreatureObject) object).getGuildId());
+                				
+                				if(object.getGuildId() != 0 && object.getObjectID() == guild.getLeader()){
+                					core.guildService.handleGuildDisband(object, guild);
                 				}
                 				
                 				core.objectService.destroyObject(object);
@@ -208,7 +245,10 @@ public class LoginService implements INetworkDispatch{
             				try {
             					core.getSWGObjectODB().remove(object.getObjectID());
             				} catch (Exception e) {
-            					
+                    			DeleteCharacterReplyMessage reply = new DeleteCharacterReplyMessage(1);
+                    			session.write(reply.serialize());
+                    			preparedStatement.close();
+                    			return;
             				}
             				
                 			DeleteCharacterReplyMessage reply = new DeleteCharacterReplyMessage(0);
@@ -293,11 +333,12 @@ public class LoginService implements INetworkDispatch{
 				
 				String characterName = resultSet.getString("firstName").replaceAll("\\s",""); ;
 				String lastName = resultSet.getString("lastName").replaceAll("\\s","");
+
 				if (lastName != null && lastName.length() > 0) characterName += " " + lastName;
 				enumerateCharacterId.addCharacter(
 						characterName,
 						resultSet.getInt("appearance"),
-						resultSet.getLong("Id"),
+						resultSet.getLong("id"),
 						resultSet.getInt("galaxyId"),
 						resultSet.getInt("statusId"));
 			}

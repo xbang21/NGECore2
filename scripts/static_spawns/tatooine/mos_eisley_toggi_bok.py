@@ -13,7 +13,9 @@ def addPlanetSpawns(core, planet):
 	stcSvc = core.staticService
 	objSvc = core.objectService
 	
+	#toggi bock
 	
+	stcSvc.spawnObject('togibok', 'tatooine', long(0), float(2756), float(7), float(-4567), float(0), float(0), float(0), float(0))
 	# Thiefs
 	
 	thiefs = stcSvc.spawnObject('thief', 'tatooine', long(0), float(2780), float(6), float(-4579), float(0), float(0), float(0), float(0), 30)

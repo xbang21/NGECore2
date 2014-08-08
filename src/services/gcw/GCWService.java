@@ -31,6 +31,7 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
+import java.util.TimeZone;
 import java.util.TreeMap;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
@@ -50,6 +51,7 @@ import resources.common.OutOfBand;
 import resources.common.collidables.CollidableCircle;
 import resources.datatables.DisplayType;
 import resources.datatables.FactionStatus;
+import resources.datatables.GcwRank;
 import resources.datatables.GcwType;
 import resources.gcw.CurrentServerGCWZoneHistory;
 import resources.gcw.CurrentServerGCWZonePercent;
@@ -306,10 +308,10 @@ public class GCWService implements INetworkDispatch {
 		}, 2, 2, TimeUnit.DAYS);
 		
 		scheduler.scheduleAtFixedRate(new Runnable() {
-			@Override public void run() { gcwUpdate(); }
+			@Override public void run() { try { gcwUpdate(); } catch (Exception e) { e.printStackTrace(); } }
 			
 			private void gcwUpdate() {
-				long nextUpdateTime = calculateNextUpdateTime();
+				int nextUpdateTime = (int) calculateNextUpdateTime();
 				
 				ODBCursor cursor = core.getSWGObjectODB().getCursor();
 				
@@ -353,14 +355,14 @@ public class GCWService implements INetworkDispatch {
 							player.setHighestImperialRank(player.getCurrentRank());
 						}
 						
-						player.setNextUpdateTime((int) nextUpdateTime);
+						player.setNextUpdateTime(nextUpdateTime);
 					}
 				}
 				
 				cursor.close();
 			}
 			
-		}, (calculateNextUpdateTime() - System.currentTimeMillis()), 604800000, TimeUnit.MILLISECONDS);
+		}, calculateNextUpdateTime(), 6048000, TimeUnit.SECONDS);
 	}
 	
 	public void addZone(String planet, String zone, float x, float z, float radius, int weight, int type) {
@@ -446,6 +448,10 @@ public class GCWService implements INetworkDispatch {
 			return;
 		}
 		
+		if (gcwPoints == 0) {
+			return;
+		}
+		
 		if (!core.factionService.isPvpFaction(actor.getFaction())) {
 			return;
 		}
@@ -455,6 +461,10 @@ public class GCWService implements INetworkDispatch {
 		}
 		
 		PlayerObject player = (PlayerObject) actor.getSlottedObject("ghost");
+		
+		int gcwBonus = actor.getSkillModBase("flush_with_success");
+		
+		gcwPoints += ((gcwPoints * gcwBonus) / 100);
 		
 		String planet = actor.getPlanet().getName();
 		
@@ -467,7 +477,6 @@ public class GCWService implements INetworkDispatch {
 				break;
 			case GcwType.Player:
 				adjustZone(planet, prefix + "_pvp", actor.getFaction(), gcwPoints);
-				//actor.sendSystemMessage(OutOfBand.ProsePackage("@gcw:gcw_rank_pvp_kill_point_grant", gcwPoints), DisplayType.Broadcast); // Put this msg after this function is used rather than inside function
 				break;
 		}
 		
@@ -535,14 +544,14 @@ public class GCWService implements INetworkDispatch {
 		
 		newranktotal = oldranktotal + newprogress;
 		
-		if (oldrank == 7 && newprogress < 0 && newranktotal < 30000) {
+		if (oldrank == GcwRank.LIEUTENANT && newprogress < 0 && newranktotal < 30000) {
 			newranktotal = 29999;
 		}
 		
 		newrank = (int) (Math.floor(newranktotal / 5000) + 1);
 		
-		if (newrank > 12) {
-			newrank = 12;
+		if (newrank > GcwRank.GENERAL) {
+			newrank = GcwRank.GENERAL;
 			newranktotal = 12 * 5000 - 1;
 		}
 		
@@ -551,6 +560,12 @@ public class GCWService implements INetworkDispatch {
 		
 		player.setCurrentRank(newrank);
 		player.setRankProgress((float) Math.floor(newprogress));
+		
+		if (newrank > oldrank) {
+			core.scriptService.callScript("scripts/collections/", "gcwrank_" + actor.getFaction(), "handleRankUp", core, actor, newrank);
+		} else {
+			core.scriptService.callScript("scripts/collections/", "gcwrank_" + actor.getFaction(), "handleRankDown", actor, newrank);
+		}
 	}
 	
 	public List<SWGObject> getSFPlayers() {
@@ -566,7 +581,7 @@ public class GCWService implements INetworkDispatch {
 		
 		Iterator<SWGObject> it = flagged.iterator();
 
-		while(it.hasNext()) {
+		while (it.hasNext()) {
 			SWGObject obj = it.next();
 			if (((CreatureObject) obj).getFactionStatus() != 2) {
 				it.remove();
@@ -600,19 +615,20 @@ public class GCWService implements INetworkDispatch {
 		return null;
 	}
 	
-	public long calculateNextUpdateTime() {
+	public int calculateNextUpdateTime() {
 		Calendar c = Calendar.getInstance();
 		Date now = new Date();
 		
 		c.setTime(now);
 		
-		int weekday = c.get(Calendar.DAY_OF_WEEK);
+		c.setTimeZone(TimeZone.getTimeZone("GMT"));
 		
-		if (weekday != Calendar.THURSDAY) {
-			int days = ((Calendar.WEDNESDAY - weekday + 2) % 7);
-			c.add(Calendar.DAY_OF_YEAR, days);
-		} else if (c.get(Calendar.HOUR_OF_DAY) >= 7) {
+		if (c.get(Calendar.DAY_OF_WEEK) == Calendar.THURSDAY && c.get(Calendar.HOUR_OF_DAY) >= 7) {
 			c.add(Calendar.DAY_OF_YEAR, 7);
+		}
+		
+		while (c.get(Calendar.DAY_OF_WEEK) != Calendar.THURSDAY) {
+			c.add(Calendar.DAY_OF_WEEK, 1);
 		}
 		
 		c.set(Calendar.HOUR_OF_DAY, 7);
@@ -620,7 +636,7 @@ public class GCWService implements INetworkDispatch {
 		c.set(Calendar.SECOND, 0);
 		c.set(Calendar.MILLISECOND, 0);
 		
-		return c.getTimeInMillis();
+		return (int) ((c.getTimeInMillis() - now.getTime()) / 1000L);
 	}
 	
 	public void updateNextUpdateTime() {
@@ -649,7 +665,7 @@ public class GCWService implements INetworkDispatch {
 			
 			PlayerObject player = (PlayerObject) creature.getSlottedObject("ghost");
 			
-			player.setNextUpdateTime((int) calculateNextUpdateTime());
+			player.setNextUpdateTime(calculateNextUpdateTime());
 		}
 		
 		cursor.close();

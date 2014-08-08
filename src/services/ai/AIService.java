@@ -26,19 +26,24 @@ import java.util.Map.Entry;
 import java.util.Random;
 import java.util.Vector;
 
+import resources.common.SpawnPoint;
 import resources.datatables.Difficulty;
 import resources.datatables.FactionStatus;
 import resources.datatables.GcwType;
 import resources.objects.creature.CreatureObject;
 import resources.objects.group.GroupObject;
 import resources.objects.player.PlayerObject;
+import services.ai.states.AIState;
+import services.ai.states.IdleState;
+import services.ai.states.LoiterState;
+import services.ai.states.PatrolState;
 import engine.resources.objects.SWGObject;
 import engine.resources.scene.Point3D;
 import main.NGECore;
 
 public class AIService {
 	
-	private Vector<AIActor> aiActors = new Vector<AIActor>();
+	@SuppressWarnings("unused") private Vector<AIActor> aiActors = new Vector<AIActor>();
 	private NGECore core;
 	
 	public AIService(NGECore core) {
@@ -54,6 +59,8 @@ public class AIService {
 		float z = pointB.z - 1 + new Random().nextFloat();
 		Point3D endPoint = new Point3D(x, core.terrainService.getHeight(planetId, x, z), z);
 		endPoint.setCell(pointB.getCell());
+		if(endPoint.getCell() != null)
+			endPoint.y = pointB.y;
 		path.add(endPoint);
 		return path;
 	}
@@ -62,21 +69,21 @@ public class AIService {
 		
 		Map<CreatureObject, Integer> damageMap = actor.getDamageMap();
 		CreatureObject creature = actor.getCreature();
-		int baseXP = getBaseXP(creature);
+		int baseXp = getBaseXP(creature);
 		for(Entry<CreatureObject, Integer> e : damageMap.entrySet()) {
 			
 			CreatureObject player = e.getKey();
 			PlayerObject ghost = (PlayerObject) player.getSlottedObject("ghost");
 			if(ghost == null)
 				continue;
-			int damage = e.getValue();
+			int damageDealt = e.getValue();
 			
 			short level = (player.getGroupId() == 0) ? player.getLevel() : ((GroupObject) core.objectService.getObject(player.getGroupId())).getGroupLevel();
 			int levelDifference = ((creature.getLevel() >= level) ? 0 : (level - creature.getLevel()));
-			float damagePercent = damage / creature.getMaxHealth();
-			int finalXP = (int) (damagePercent * baseXP);
-			finalXP -= ((levelDifference > 20) ? (finalXP - 1) : (((levelDifference * 5) / 100) * finalXP));	
-			core.playerService.giveExperience(player, finalXP);
+			int damagePercent = ((damageDealt / creature.getMaxHealth()) * 100);
+			int finalXp = (((damagePercent / 100) * baseXp) + (creature.getMaxHealth() / 12));
+			finalXp -= ((levelDifference > 20) ? (finalXp - 1) : (((levelDifference * 5) / 100) * finalXp));	
+			core.playerService.giveExperience(player, finalXp);
 		}
 		
 	}
@@ -162,4 +169,55 @@ public class AIService {
 		}
 	}
 	
+	public void setPatrol(CreatureObject creature, Vector<Point3D> patrolpoints){
+		AIActor actor = (AIActor) creature.getAttachment("AI");
+		if (actor==null)
+			return;
+		
+		actor.setPatrolPoints(patrolpoints);
+		AIState intendedPrimaryAIState = new PatrolState();
+		actor.setIntendedPrimaryAIState(intendedPrimaryAIState);
+		actor.setCurrentState(intendedPrimaryAIState);	
+	}
+	
+	public void setPatrol(CreatureObject creature, boolean active){
+		AIActor actor = (AIActor) creature.getAttachment("AI");
+		if (actor==null)
+			return;
+		
+		if (active){
+			AIState intendedPrimaryAIState = new PatrolState();
+			actor.setIntendedPrimaryAIState(intendedPrimaryAIState);
+			actor.setCurrentState(intendedPrimaryAIState);
+		}
+		else
+			actor.setCurrentState(new IdleState());
+	}
+	
+	public void setLoiter(CreatureObject creature, float minDist, float maxDist){
+		AIActor actor = (AIActor) creature.getAttachment("AI");
+		if (actor==null)
+			return;
+		actor.setOriginPosition(creature.getWorldPosition());
+		Point3D currentDestination = SpawnPoint.getRandomPosition(creature.getWorldPosition(), minDist, maxDist, creature.getPlanetId()); 
+		actor.getMovementPoints().add(currentDestination);
+		actor.setLoiterDestination(currentDestination);
+		actor.setMinLoiterDist(minDist);
+		actor.setMaxLoiterDist(maxDist);
+		AIState intendedPrimaryAIState = new LoiterState();
+		actor.setIntendedPrimaryAIState(intendedPrimaryAIState);	
+		actor.setCurrentState(intendedPrimaryAIState);
+	}	
+	
+	public void logAI(String logMsg){
+		if (checkDeveloperIdentity()){
+			System.err.println("AI-LOG: " + logMsg);
+		}
+	}
+	
+	public boolean checkDeveloperIdentity(){
+		if (System.getProperty("user.name").equals("Charon"))
+			return true;
+		return false;
+	}
 }

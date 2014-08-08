@@ -1,19 +1,19 @@
 import sys
 from services.spawn import MobileTemplate
 from services.spawn import WeaponTemplate
+from resources.datatables import WeaponType
+from resources.datatables import Difficulty
+from resources.datatables import Options
 from java.util import Vector
+
 
 def addTemplate(core):
 	mobileTemplate = MobileTemplate()
 	
 	mobileTemplate.setCreatureName('mountain_worrt')
 	mobileTemplate.setLevel(19)
-	mobileTemplate.setMinLevel(18)
-	mobileTemplate.setMaxLevel(21)
-	mobileTemplate.setDifficulty(0)
-	mobileTemplate.setAttackRange(5)
-	mobileTemplate.setAttackSpeed(1.0)
-	mobileTemplate.setWeaponType(6)
+	mobileTemplate.setDifficulty(Difficulty.NORMAL)
+
 	mobileTemplate.setMinSpawnDistance(4)
 	mobileTemplate.setMaxSpawnDistance(8)
 	mobileTemplate.setDeathblow(False)
@@ -25,20 +25,23 @@ def addTemplate(core):
 	mobileTemplate.setBoneType("Animal Bone")
 	mobileTemplate.setHideAmount(2)
 	mobileTemplate.setSocialGroup("mountain worrt")
-	mobileTemplate.setAssistRange(0)
+	mobileTemplate.setAssistRange(6)
 	mobileTemplate.setStalker(False)	
-	mobileTemplate.setOptionsBitmask(192)
+	mobileTemplate.setOptionsBitmask(Options.AGGRESSIVE | Options.ATTACKABLE)
 	
 	templates = Vector()
 	templates.add('object/mobile/shared_worrt.iff')
 	mobileTemplate.setTemplates(templates)
 
 	weaponTemplates = Vector()
-	weapontemplate = WeaponTemplate('object/weapon/ranged/creature/shared_creature_spit_small_toxicgreen.iff', 6, 1.0)
+	weapontemplate = WeaponTemplate('object/weapon/ranged/creature/shared_creature_spit_small_toxicgreen.iff', WeaponType.UNARMED, 1.0, 6, 'kinetic')
 	weaponTemplates.add(weapontemplate)
 	mobileTemplate.setWeaponTemplateVector(weaponTemplates)
 	
 	attacks = Vector()
+	attacks.add('bm_charge_2')
+	attacks.add('bm_dampen_pain_1')
+	attacks.add('bm_spit_2')
 	mobileTemplate.setDefaultAttack('creatureRangedAttack')
 	mobileTemplate.setAttacks(attacks)
 	

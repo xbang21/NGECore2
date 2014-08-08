@@ -44,8 +44,8 @@ import protocol.swg.objectControllerObjects.MissionAcceptRequest;
 import protocol.swg.objectControllerObjects.MissionAcceptResponse;
 import protocol.swg.objectControllerObjects.MissionListRequest;
 import resources.common.BountyListItem;
-import resources.common.SpawnPoint;
 import resources.common.ObjControllerOpcodes;
+import services.mission.CommonerSpawn;
 import resources.objectives.BountyMissionObjective;
 import resources.objectives.DeliveryMissionObjective;
 import resources.objectives.DestroyMissionObjective;
@@ -53,8 +53,6 @@ import resources.objectives.SurveyMissionObjective;
 import resources.objects.creature.CreatureObject;
 import resources.objects.mission.MissionObject;
 import resources.objects.player.PlayerObject;
-import resources.objects.resource.GalacticResource;
-import resources.objects.resource.ResourceRoot;
 import resources.objects.tangible.TangibleObject;
 import engine.clientdata.StfTable;
 import engine.clients.Client;
@@ -75,12 +73,12 @@ public class MissionService implements INetworkDispatch {
 	// Use a HashMap for obtaining number of entries so we aren't using a visitor all the time.
 	private Map<String, Integer> entryCounts = new ConcurrentHashMap<String, Integer>();
 	private Map<Long, BountyListItem> bountyMap = new ConcurrentHashMap<Long, BountyListItem>();
+	private Map<String, Vector<CommonerSpawn>> commonerMap = new ConcurrentHashMap<String, Vector<CommonerSpawn>>();
 	private ObjectDatabase bountiesODB;
 	private Random ran = new Random();
 	
 	public MissionService(NGECore core) {
 		this.core = core;
-		
 		try { nameGenerator = new NameGen("names.txt"); } 
 		catch (IOException e) { e.printStackTrace(); }
 		
@@ -153,20 +151,20 @@ public class MissionService implements INetworkDispatch {
 				
 				switch(terminalType) {
 					case TerminalType.GENERIC:
-						handleMissionListRequest(core.objectService.getObject(request.getObjectId()), request.getTickCount(), TerminalType.GENERIC);
+						handleMissionListRequest(object, request.getTickCount(), TerminalType.GENERIC);
 						break;
 					
 					case TerminalType.BOUNTY:
 						if (!object.hasSkill("class_bountyhunter_phase1_novice")) { object.sendSystemMessage("@mission/mission_generic:not_bounty_hunter_terminal", (byte) 0); } 
-						else { handleMissionListRequest(core.objectService.getObject(request.getObjectId()), request.getTickCount(), TerminalType.BOUNTY); }
+						else { handleMissionListRequest(object, request.getTickCount(), TerminalType.BOUNTY); }
 						break;
 					
 					case TerminalType.ARTISAN:
-						//handleMissionListRequest(core.objectService.getObject(request.getObjectId()), request.getTickCount(), TerminalType.ARTISAN);
+						//handleMissionListRequest(object, request.getTickCount(), TerminalType.ARTISAN);
 						break;
 					
 					case TerminalType.ENTERTAINER:
-						//handleMissionListRequest(core.objectService.getObject(request.getObjectId()), request.getTickCount(), TerminalType.ENTERTAINER);
+						//handleMissionListRequest(object, request.getTickCount(), TerminalType.ENTERTAINER);
 						break;
 
 					default: break;
@@ -216,7 +214,16 @@ public class MissionService implements INetworkDispatch {
 		handleMissionAbort(creature, mission, false);
 	}
 	
+	/**
+	 * Aborts the target mission for the specified player. If silent is true then MissionObjective.abort is not called.
+	 * @param creature Target player used in MissionObjective.abort
+	 * @param mission Mission to abort
+	 * @param silent If true, called the MissionObjective.abort() method, otherwise it simply destroys the mission (false)
+	 */
 	public void handleMissionAbort(CreatureObject creature, MissionObject mission, boolean silent) {
+		
+		creature.getPlayerObject().removeActiveMission(mission.getObjectID());
+		
 		MissionObjective objective = mission.getObjective();
 		
 		if (objective != null && !silent)
@@ -263,7 +270,8 @@ public class MissionService implements INetworkDispatch {
 		
 		if (entryCounts.get(missionStf) != null) { ranEntryNum = ran.nextInt(entryCounts.get(missionStf)); } 
 		//else { System.out.println(missionStf + " was not found in entryCount and is using entry #1"); }
-		
+		if (missionStf.equals("mission/mission_deliver_neutral_hard") && ranEntryNum == 1) // m1s value is "mission_success_mail", so dont even use the mission
+			return 2;
 		if (ranEntryNum == 0)
 			return 1;
 		else
@@ -300,12 +308,13 @@ public class MissionService implements INetworkDispatch {
 						randomBountyMission(player, mission);
 					
 					else if (type == TerminalType.ARTISAN)
-						randomSurveyMission(player, mission);
+						return;
+						//randomSurveyMission(player, mission);
 
 					else
 						return;
 					
-					mission.setRepeatCount(requestCounter);
+					mission.incrementRepeatCounter();
 					typeOneCount.incrementAndGet();
 					
 				} else if (typeTwoCount.get() < 5) {
@@ -322,7 +331,7 @@ public class MissionService implements INetworkDispatch {
 					else
 						return;
 					
-					mission.setRepeatCount(requestCounter);
+					mission.incrementRepeatCounter();
 					typeTwoCount.incrementAndGet();
 				}
 			}
@@ -330,12 +339,17 @@ public class MissionService implements INetworkDispatch {
 	}
 	
 	public void handleMissionComplete(CreatureObject creature, MissionObject mission) {
+		
+		creature.getPlayerObject().removeActiveMission(mission.getObjectID());
+		
 		MissionObjective objective = mission.getObjective();
 		
 		if (objective == null)
 			return;
 		
 		objective.complete(core, creature);
+		
+		core.objectService.destroyObject(mission.getObjectId());
 	}
 	
 	private boolean handleMissionAccept(CreatureObject creature, MissionObject mission) {
@@ -376,6 +390,12 @@ public class MissionService implements INetworkDispatch {
 			return false;
 		}
 		
+		if (mission.getPlanetId() != creature.getPlanetId()) {
+			mission.setPlanet(creature.getPlanet());
+			mission.setPlanetId(creature.getPlanetId());
+		}
+		
+		creature.getPlayerObject().addActiveMission(mission.getObjectID());
 		missionBag.transferTo(creature, datapad, mission);
 		createMissionObjective(creature, mission);
 		return true;
@@ -431,7 +451,7 @@ public class MissionService implements INetworkDispatch {
 				return null;
 		}
 	}
-	private void randomSurveyMission(SWGObject player, MissionObject mission) {
+	/*private void randomSurveyMission(SWGObject player, MissionObject mission) {
 		
 		byte generalType = (byte) (ran.nextInt(3) == 0 ? 1 : 0);
 		
@@ -470,23 +490,52 @@ public class MissionService implements INetworkDispatch {
 		String missionStf = "mission/mission_npc_survey_neutral_easy";
 
 		mission.setMissionId(getRandomStringEntry(missionStf));
-		mission.setMissionDescription(missionStf);
-		mission.setMissionTitle(missionStf);
+		mission.setDescription("@" + missionStf + ":" + "m" + mission.getMissionId() + "d");
+		mission.setTitle("@" + missionStf + ":" + "m" + mission.getMissionId() + "t");
 		
 		mission.setCreator(nameGenerator.compose(2) + " " + nameGenerator.compose(3));
 		
-		mission.setMissionLevel(randLevel);
+		mission.setDifficultyLevel(randLevel);
 		
-		mission.setStartLocation(player.getPosition(), player.getPlanet().name);
+		mission.setStartLocation(player.getPosition(), 0, player.getPlanet().name);
 		
 		mission.setCreditReward(400 + (randLevel - minLevel) * 20 + ran.nextInt(100));
 		
-		mission.setMissionTemplateObject(CRC.StringtoCRC(ResourceRoot.CONTAINER_TYPE_IFF_SIGNIFIER[family.getContainerType()])); // This should be the resource container obj
-		mission.setMissionTargetName(family.getResourceType() + family.getResourceClass());
+		mission.setTemplateObject(CRC.StringtoCRC(ResourceRoot.CONTAINER_TYPE_IFF_SIGNIFIER[family.getContainerType()])); // This should be the resource container obj
+		mission.setTargetName(family.getResourceType() + family.getResourceClass());
 		
-	}
+	}*/
 	
 	private void randomDeliveryMission(SWGObject player, MissionObject mission) {
+		if (!commonerMap.containsKey(player.getPlanet().name))
+			return;
+		
+		Vector<CommonerSpawn> spawns = commonerMap.get(player.getPlanet().name);
+		Point3D playerLocation = player.getWorldPosition();
+		MissionLocation startLocation = null;
+		MissionLocation destinationLocation = null;
+		
+		Random randomSpawn = new Random(10);
+		// TODO: There is probably a much better way of doing this.
+		for (CommonerSpawn spawn : spawns) {
+			if (randomSpawn.nextInt() >= 5) { 
+				continue;
+			}
+			
+			float distance = playerLocation.getDistance2D(spawn.getLocation());
+			if (distance <= 500 && startLocation == null) {
+				startLocation = new MissionLocation(spawn.getLocation(), spawn.getObjectId(), player.getPlanet().name);
+			} else if (distance <= 2500 && destinationLocation == null) {
+				destinationLocation = new MissionLocation(spawn.getLocation(), spawn.getObjectId(), player.getPlanet().name);
+			}
+			
+			if (destinationLocation != null && startLocation != null)
+				break;
+		}
+		
+		if (startLocation == null || destinationLocation == null)
+			return;
+		
 		mission.setMissionType("deliver");
 		
 		String[] difficulties = { "easy", "medium", "hard" };
@@ -494,24 +543,20 @@ public class MissionService implements INetworkDispatch {
 		String missionStf = "mission/mission_deliver_neutral_" + difficulties[ran.nextInt(difficulties.length)];
 
 		mission.setMissionId(getRandomStringEntry(missionStf));
-		mission.setMissionDescription(missionStf, "o");
-		mission.setMissionTitle(missionStf);
+		mission.setDescription("@" + missionStf + ":" + "m" + mission.getMissionId() + "d");
+		mission.setTitle("@" + missionStf + ":" + "m" + mission.getMissionId() + "t");
 		
 		mission.setCreator(nameGenerator.compose(2) + " " + nameGenerator.compose(3));
 		
-		mission.setMissionLevel(5);
+		mission.setDifficultyLevel(5);
 		
-		// TODO: Use pre-defined commoner locations
-		Point3D startLocation = SpawnPoint.getRandomPosition(player.getPosition(), (float) 50, (float) 300, player.getPlanetId());
-		Point3D destination = SpawnPoint.getRandomPosition(startLocation, (float) 50, (float) 500, player.getPlanetId());
+		mission.setStartLocation(startLocation);
+		mission.setDestinationLocation(destinationLocation);
+		mission.setCreditReward((int) (200 + ((startLocation.getLocation().getDistance2D(destinationLocation.getLocation()) / 10))));
 		
-		mission.setStartLocation(startLocation, player.getPlanet().name);
-		mission.setDestination(destination, player.getPlanet().name);
-		
-		mission.setCreditReward((int) (200 + ((startLocation.getDistance2D(destination) / 10))));
-		
-		mission.setMissionTemplateObject(CRC.StringtoCRC("object/tangible/mission/shared_mission_datadisk.iff"));
-		mission.setMissionTargetName("Datadisk");
+		mission.setTemplateObject(CRC.StringtoCRC("object/tangible/mission/shared_mission_datadisk.iff"));
+		mission.setTargetName("Datadisk");
+
 	}
 	
 	private void randomBountyMission(SWGObject player, MissionObject mission) {
@@ -533,29 +578,25 @@ public class MissionService implements INetworkDispatch {
 			if (attempts >= 5 && !gotBounty)
 				return;
 		}
-
+		if (bountyTarget == null)
+			return;
+		
 		mission.setMissionType("bounty");
 		
 		String missionStf = "mission/mission_bounty_jedi";
 		
 		if (!bountyTarget.getProfession().equals("")) { // TODO: Smuggler mission checks.
-			if (bountyTarget.getFaction().equals("neutral")) { 	// There were no neutral bounty missions. Remove this when done testing.
-				mission.setMissionTargetName("@mission/mission_bounty_jedi:neutral_jedi");
-				mission.setMissionId(3);
-				mission.setCreator("Corporate Sector Authority");
-			}
-			else if (bountyTarget.getFaction().equals("rebel")) {
-				mission.setMissionTargetName("Rebel Bounty");
+			if (bountyTarget.getFaction().equals("rebel")) {
+				mission.setTargetName("Rebel Bounty");
 				mission.setMissionId(2);
 				mission.setCreator("The Galactic Empire");
-			}
-			else if (bountyTarget.getFaction().equals("imperial")) {
-				mission.setMissionTargetName("Imperial Bounty");
+			} else if (bountyTarget.getFaction().equals("imperial")) {
+				mission.setTargetName("Imperial Bounty");
 				mission.setMissionId(1);
 				mission.setCreator("The Alliance");
 			}
-			mission.setMissionTitle(missionStf);
-			mission.setMissionDescription(missionStf);
+			mission.setTitle("@" + missionStf + ":" + "m" + mission.getMissionId() + "t");
+			mission.setDescription("@" + missionStf + ":" + "m" + mission.getMissionId() + "d");
 		} else {
 			// TODO: Dead code, but place-holder for implementation of smuggler missions.
 			if (bountyTarget.getFaction().equals("neutral")) {
@@ -567,17 +608,18 @@ public class MissionService implements INetworkDispatch {
 			else if (bountyTarget.getFaction().equals("imperial")) {
 				mission.setMissionId(1);
 			}
-			mission.setMissionTitle(missionStf, "s");
-			mission.setMissionDescription(missionStf, "s");
+			mission.setTitle("@" + missionStf + ":" + "m" + mission.getMissionId() + "ts");
+			mission.setDescription("@" + missionStf + ":" + "m" + mission.getMissionId() + "ds");
 		}
 		
-		mission.setMissionLevel(95 + bountyTarget.getFailedAttempts());
+		mission.setDifficultyLevel(95 + bountyTarget.getFailedAttempts());
 		
 		mission.setCreditReward(bountyTarget.getCreditReward());
 		
-		mission.setMissionTemplateObject(CRC.StringtoCRC("object/tangible/mission/shared_mission_bounty_jedi_target.iff"));
+		mission.setTemplateObject(CRC.StringtoCRC("object/tangible/mission/shared_mission_bounty_jedi_target.iff"));
 		
 		mission.setBountyMarkId(bountyTarget.getObjectID());
+		
 	}
 	
 	public enum TerminalType {;
@@ -644,9 +686,20 @@ public class MissionService implements INetworkDispatch {
 		return true;
 	}
 	
+	public void addCommoner(SWGObject commoner) {
+		CommonerSpawn commonerSpawn = new CommonerSpawn(commoner.getObjectId(), commoner.getPosition());
+		if (commonerMap.containsKey(commoner.getPlanet().name))
+			commonerMap.get(commoner.getPlanet().name).add(commonerSpawn);
+		else {
+			commonerMap.put(commoner.getPlanet().name, new Vector<CommonerSpawn>());
+			commonerMap.get(commoner.getPlanet().name).add(commonerSpawn);
+		}
+		
+	}
+	
 	public boolean removeBounty(long bountyTarget, boolean listRemove) {
 		if (listRemove)
-			bountyMap.remove(bountiesODB.get(bountyTarget));
+			bountyMap.remove(bountyTarget);
 		bountiesODB.remove(bountyTarget);
 		return true;
 	}

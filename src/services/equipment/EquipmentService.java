@@ -157,17 +157,15 @@ public class EquipmentService implements INetworkDispatch {
 	}
 	
 	public void equip(CreatureObject actor, SWGObject item) 
-	{
+	{		
 		String template = ((item.getAttachment("customServerTemplate") == null) ? item.getTemplate() : (item.getTemplate().split("shared_")[0] + "shared_" + ((String) item.getAttachment("customServerTemplate")) + ".iff"));
 		String serverTemplate = template.replace(".iff", "");
 		
 		PyObject func = core.scriptService.getMethod("scripts/" + serverTemplate.split("shared_" , 2)[0].replace("shared_", ""), serverTemplate.split("shared_" , 2)[1], "equip");
-		if(func != null) func.__call__(Py.java2py(core), Py.java2py(actor), Py.java2py(item));
-		
-		// TODO: bio-link (assign it by objectID with setAttachment and then just display the customName for that objectID).
-		
-		if(!actor.getEquipmentList().contains(item.getObjectId())) 
+		if(func != null) func.__call__(Py.java2py(core), Py.java2py(actor), Py.java2py(item));				
+		if(!actor.getEquipmentList().contains(item.getObjectID())) 
 		{
+			if(item instanceof WeaponObject) actor.setWeaponId(item.getObjectID());
 			actor.addObjectToEquipList(item);
 			processItemAtrributes(actor, item, true);
 		}
@@ -182,8 +180,10 @@ public class EquipmentService implements INetworkDispatch {
 		if(func != null) func.__call__(Py.java2py(core), Py.java2py(actor), Py.java2py(item));
 
 		
-		if(actor.getEquipmentList().contains(item.getObjectId())) 
+		if(actor.getEquipmentList().contains(item.getObjectID())) 
 		{
+			if(item instanceof WeaponObject) actor.setWeaponId(actor.getSlottedObject("default_weapon").getObjectID());
+			
 			actor.removeObjectFromEquipList(item);
 			processItemAtrributes(actor, item, false);
 		}
@@ -198,7 +198,49 @@ public class EquipmentService implements INetworkDispatch {
 		
 		if(equipping)
 		{
-			if(item.getStringAttribute("cat_wpn_damage.wpn_category") != null) core.skillModService.addSkillMod(creature, "display_only_critical", getWeaponCriticalChance(creature, item));
+			if(item.getStringAttribute("cat_wpn_damage.wpn_category") != null) {
+				core.skillModService.addSkillMod(creature, "display_only_critical", getWeaponCriticalChance(creature, item));
+				
+				creature.setAttachment("EquippedWeapon", item.getObjectID());
+				// Check if weapon has power up active
+				if (item.getAttachment("PUPEndTime")!=null){
+					long pupEndTime = (long)item.getAttachment("PUPEndTime");
+					if (pupEndTime>System.currentTimeMillis()){
+						// do nothing let the rest add the mods		
+					} else {
+						// Make sure pup buff icons are cleared
+					}
+				}
+			}
+			
+			if(item.getTemplate().contains("shirt")) {
+				
+				creature.setAttachment("EquippedShirt", item.getObjectID());
+				// Check if shirt has power up active
+				if (item.getAttachment("PUPEndTime")!=null){
+					long pupEndTime = (long)item.getAttachment("PUPEndTime");
+					if (pupEndTime>System.currentTimeMillis()){
+						// do nothing let the rest add the mods		
+					} else {
+						// Make sure pup buff icons are cleared
+					}
+				}
+			}
+			
+			if(item.getTemplate().contains("chest")) {
+				
+				creature.setAttachment("EquippedChest", item.getObjectID());
+				// Check if chest has power up active
+				if (item.getAttachment("PUPEndTime")!=null){
+					long pupEndTime = (long)item.getAttachment("PUPEndTime");
+					if (pupEndTime>System.currentTimeMillis()){
+						// do nothing let the rest add the mods		
+					} else {
+						// Make sure pup buff icons are cleared
+					}
+				}
+			}
+			
 			if(item.getStringAttribute("proc_name") != null) core.buffService.addBuffToCreature(creature, item.getStringAttribute("proc_name").replace("@ui_buff:", ""), creature);
 			
 			for(Entry<String, Object> e : attributes.entrySet()) 
@@ -226,7 +268,19 @@ public class EquipmentService implements INetworkDispatch {
 		}
 		else
 		{
-			if(item.getStringAttribute("cat_wpn_damage.wpn_category") != null) core.skillModService.deductSkillMod(creature, "display_only_critical", getWeaponCriticalChance(creature, item));
+			if(item.getStringAttribute("cat_wpn_damage.wpn_category") != null){
+				core.skillModService.deductSkillMod(creature, "display_only_critical", getWeaponCriticalChance(creature, item));
+				creature.setAttachment("EquippedWeapon", null);
+			}
+			
+			if(item.getTemplate().contains("shirt")) {
+				creature.setAttachment("EquippedShirt", null);
+			}
+			
+			if(item.getTemplate().contains("chest")) {
+				creature.setAttachment("EquippedChest", null);
+			}
+			
 			if(item.getStringAttribute("proc_name") != null) core.buffService.removeBuffFromCreatureByName(creature, item.getStringAttribute("proc_name").replace("@ui_buff:", ""));
 			
 			for(Entry<String, Object> e : attributes.entrySet())
@@ -332,13 +386,15 @@ public class EquipmentService implements INetworkDispatch {
 		// Get our lightsaber weapon object
 		if(item.getContainer().getTemplate().startsWith("object/tangible/inventory/shared_lightsaber_inventory")) lightsaber = (WeaponObject) item.getGrandparent();
 		else if(targetContainer.getTemplate().startsWith("object/tangible/inventory/shared_lightsaber_inventory")) lightsaber = (WeaponObject) targetContainer.getContainer();
+		
+		if(lightsaber == null) return;
+		
 		lightsaberInventory = (TangibleObject) lightsaber.getSlottedObject("saber_inv");
 		
 		if(lightsaber.getAttachment("weaponBaseDamageMin") == null) lightsaber.setAttachment("weaponBaseDamageMin", lightsaber.getMinDamage());
 		if(lightsaber.getAttachment("weaponBaseDamageMax") == null) lightsaber.setAttachment("weaponBaseDamageMax", lightsaber.getMaxDamage());
 		
 		// Check if item is a lightsaber component
-		if(lightsaber == null) return;
 		if(lightsaberInventory == null) return;
 		if(lightsaber.getContainer() instanceof CreatureObject)
 		{
@@ -381,7 +437,7 @@ public class EquipmentService implements INetworkDispatch {
 		lightsaberInventory.viewChildren(lightsaberInventory, false, false, new Traverser()
 		{
 			WeaponObject saber;
-			TangibleObject saberInv;
+			@SuppressWarnings("unused") TangibleObject saberInv;
 			
 			int minDamageBonus = 0;
 			int maxDamageBonus = 0;

@@ -22,17 +22,13 @@
 package resources.objects.player;
 
 import java.io.Serializable;
-import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.BitSet;
-import java.util.Calendar;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import java.util.TreeMap;
 import java.util.Vector;
-
-import main.NGECore;
+import java.util.concurrent.TimeUnit;
 
 import org.apache.mina.core.buffer.IoBuffer;
 
@@ -96,6 +92,7 @@ public class PlayerObject extends IntangibleObject implements Serializable {
 		baseline.put("lotsRemaining", 10);
 		baseline.put("holoEmote", "");
 		baseline.put("holoEmoteUses", 0);
+		baseline.put("activeMissions", new ArrayList<Long>()); // TODO: Look at MissionCriticalObject in CREO4, could use that instead of this
 		return baseline;
 	}
 	
@@ -115,16 +112,16 @@ public class PlayerObject extends IntangibleObject implements Serializable {
 		profileFlagsList.add(0);
 		baseline.put("profileFlagsList", profileFlagsList);
 		baseline.put("title", "");
-		baseline.put("bornDate", Integer.parseInt(new SimpleDateFormat("yyyymmdd", Locale.ENGLISH).format(Calendar.getInstance().getTime())));
+		baseline.put("bornDate", (int) TimeUnit.DAYS.convert((System.currentTimeMillis() - 978220800000L), TimeUnit.MILLISECONDS));
 		baseline.put("totalPlayTime", 0);
 		baseline.put("professionIcon", 0);
-		baseline.put("profession", "trader_1a");
+		baseline.put("profession", "trader_0a");
 		baseline.put("gcwPoints", 0);
 		baseline.put("pvpKills", 0);
 		baseline.put("lifetimeGcwPoints", (long) 0);
 		baseline.put("lifetimePvpKills", 0);
 		baseline.put("collections", new BitSet()); 
-		baseline.put("17", new SWGList<Byte>(this, 3, 17, false)); // Misc ints (2 ints in tutorial, 5 bytes other times...)
+		baseline.put("guildRanks", new BitSet());  //"17", new SWGList<Byte>(this, 3, 17, false)); // Misc ints (2 ints in tutorial, 5 bytes other times...)
 		baseline.put("showHelmet", true);
 		baseline.put("showBackpack", true);
 		return baseline;
@@ -138,16 +135,16 @@ public class PlayerObject extends IntangibleObject implements Serializable {
 		baseline.put("rankProgress", (float) 0);
 		baseline.put("highestRebelRank", 0);
 		baseline.put("highestImperialRank", 0);
-		baseline.put("nextUpdateTime", (int) NGECore.getInstance().gcwService.calculateNextUpdateTime());
+		baseline.put("nextUpdateTime", 0);
 		baseline.put("home", "");
 		baseline.put("citizenship", Citizenship.Homeless);
 		baseline.put("cityRegionDefender", new RegionDefender());
 		baseline.put("guildRegionDefender", new RegionDefender());
-		baseline.put("12", 0); // General?
+		baseline.put("12", (long) 0); // General?
 		baseline.put("13", 0); // Guild Rank Title?
-		baseline.put("14", 0); // Citizen Rank Title?
-		baseline.put("15", 0); // All random guesses, always seem to be 0
-		baseline.put("16", 0);
+		baseline.put("14", (short) 0); // Citizen Rank Title? 6 bytes
+		baseline.put("speederElevation", 1);
+		baseline.put("vehicleAttackCommand", ""); 
 		return baseline;
 	}
 	
@@ -190,8 +187,8 @@ public class PlayerObject extends IntangibleObject implements Serializable {
 		baseline.put("kills", 0);
 		baseline.put("19", 0);
 		baseline.put("pet", (long) 0);
-		baseline.put("petAbilities", new SWGSet<String>(this, 9, 15, false));
-		baseline.put("22", (long) 0); // Unknown type currently
+		baseline.put("petAbilities", new SWGList<String>(this, 9, 21, false));
+		baseline.put("activePetAbilities", new SWGList<String>(this, 9, 22, false));
 		baseline.put("23", (byte) 0); // Seen as 1 or 2 sometimes // Gets set to 0x02 sometimes
 		baseline.put("24", 0); // Seen as 4
 		baseline.put("25", (long) 0); // Bitmask starts with 0x20 ends with 0x40
@@ -199,7 +196,7 @@ public class PlayerObject extends IntangibleObject implements Serializable {
 		baseline.put("27", (byte) 0); // Changed from 6 bytes to 9
 		baseline.put("28", (long) 0); // Seen as 856
 		baseline.put("29", (long) 0); // Seen as 8559
-		baseline.put("residenceTime", 0); // Date format of some sort.  Seen as Saturday 28th May 2011
+		baseline.put("residenceTime", 0); // Assumption.  Date format of some sort.  Seen as Saturday 28th May 2011
 		return baseline;
 	}
 	
@@ -404,6 +401,22 @@ public class PlayerObject extends IntangibleObject implements Serializable {
 	
 	public int getHighestSetBit() {
 		return ((BitSet) getBaseline(3).get("collections")).length();
+	}
+	
+	public boolean getGuildRank(int slotIndex) {
+		return ((BitSet) getBaseline(3).get("guildRanks")).get(slotIndex);
+	}
+	
+	public void toggleGuildRank(int slotIndex) {
+		BitSet guildRanks = (BitSet) getBaseline(3).get("guildRanks");
+		guildRanks.set(slotIndex, !guildRanks.get(slotIndex));
+		getBaseline(3).set("guildRanks", guildRanks);
+	}
+	
+	public void clearGuildRanks() {
+		BitSet guildRanks = (BitSet) getBaseline(3).get("guildRanks");
+		guildRanks.clear();
+		getBaseline(3).set("guildRanks", guildRanks);
 	}
 	
 	public boolean isShowingHelmet() {
@@ -770,10 +783,15 @@ public class PlayerObject extends IntangibleObject implements Serializable {
 	}
 	
 	@SuppressWarnings("unchecked")
-	public SWGSet<String> getPetAbilities() {
-		return (SWGSet<String>) getBaseline(8).get("petAbilities");
+	public SWGList<String> getPetAbilities() {
+		return (SWGList<String>) getBaseline(9).get("petAbilities");
 	}
 	
+	@SuppressWarnings("unchecked")
+	public SWGList<String> getActivePetAbilities() {
+		return (SWGList<String>) getBaseline(9).get("activePetAbilities");
+	}
+		
 	public int getJediState() {
 		return 0;
 	}
@@ -898,10 +916,10 @@ public class PlayerObject extends IntangibleObject implements Serializable {
 	}
 	
 	public void addChannel(int roomId) {
-		getJoinedChatChannels().add(roomId);
+		getJoinedChatChannels().add((Integer) roomId);
 	}
 	
-	public void removeChannel(int roomId) {
+	public void removeChannel(Integer roomId) {
 		if (getJoinedChatChannels().contains(roomId)) {
 			getJoinedChatChannels().remove(roomId);
 		}
@@ -913,6 +931,19 @@ public class PlayerObject extends IntangibleObject implements Serializable {
 		}
 		
 		return false;
+	}
+	
+	public void addActiveMission(long missionObjId) {
+		getActiveMissions().add(missionObjId);
+	}
+	
+	public void removeActiveMission(long missionObjId) {
+		getActiveMissions().remove(missionObjId);
+	}
+	
+	@SuppressWarnings("unchecked")
+	public List<Long> getActiveMissions() {
+		return (List<Long>) otherVariables.get("activeMissions");
 	}
 	
 	public boolean isCallingCompanion() {

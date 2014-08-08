@@ -69,6 +69,7 @@ public class CommandService implements INetworkDispatch  {
 	}
 	
 	public boolean callCommand(CreatureObject actor, SWGObject target, BaseSWGCommand command, int actionCounter, String commandArgs) {
+
 		if (actor == null) {
 			return false;
 		}
@@ -105,22 +106,20 @@ public class CommandService implements INetworkDispatch  {
 			}
 		}
 		
-		// This SHOULD be invalid locomotions but we don't track these currently.
-		// Postures are the best we can do.
-		for (byte posture : command.getInvalidPostures()) {
-			if (actor.getPosture() == posture) {
-				//return false;
+		for (byte locomotion : command.getInvalidLocomotions()) {
+			if (actor.getLocomotion() == locomotion) {
+				return false;
 			}
 		}
-
+		
 		switch (command.getTargetType()) {
 			case 0: // Target Not Used For This Command
 				break;
 			case 1: // Other Only (objectId/targetName)
-				if (target == null) {
+				if (target == null || target == actor) {
 					if (commandArgs != null && !commandArgs.equals("")) {
 						String name = commandArgs.split(" ")[0];
-						
+
 						target = core.objectService.getObjectByFirstName(name);
 						
 						if (target == actor) {
@@ -130,7 +129,7 @@ public class CommandService implements INetworkDispatch  {
 					
 					break;
 				}
-				
+
 				if (target == actor) {
 					return false;
 				}
@@ -452,8 +451,13 @@ public class CommandService implements INetworkDispatch  {
 	}
 	
 	public void processCombatCommand(CreatureObject attacker, SWGObject target, CombatCommand command, int actionCounter, String commandArgs) {
-		if (FileUtilities.doesFileExist("scripts/commands/combat/" + command.getCommandName() + ".py")) {
-			core.scriptService.callScript("scripts/commands/combat/", command.getCommandName(), "setup", core, attacker, target, command);
+		if (FileUtilities.doesFileExist("scripts/commands/combat/" + command.getCommandName().toLowerCase() + ".py")) {
+			core.scriptService.callScript("scripts/commands/combat/", command.getCommandName().toLowerCase(), "setup", core, attacker, target, command);
+		} else {
+			if (FileUtilities.doesFileExist("scripts/commands/" + command.getCommandName().toLowerCase() + ".py")) {
+				System.err.print("Command " + command.getCommandName() + " is considered a combat command by the client but has a regular command script!");
+				core.scriptService.callScript("scripts/commands/combat/", command.getCommandName().toLowerCase(), "run", core, attacker, target, "");
+			}
 		}
 		
 		boolean success = true;
@@ -492,6 +496,9 @@ public class CommandService implements INetworkDispatch  {
 			weapon = (WeaponObject) attacker.getSlottedObject("default_weapon");	// use unarmed/default weapon if no weapon is equipped
 		else
 			weapon = (WeaponObject) core.objectService.getObject(attacker.getWeaponId());
+		
+		if(weapon == null)
+			weapon = (WeaponObject) attacker.getSlottedObject("default_weapon");
 		
 		float maxRange = 0;
 		

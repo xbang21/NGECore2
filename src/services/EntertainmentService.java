@@ -62,6 +62,8 @@ public class EntertainmentService implements INetworkDispatch {
 	
 	private Map<String, PerformanceEffect> performanceEffects = new ConcurrentHashMap<String, PerformanceEffect>();
 	
+	
+	
 	public EntertainmentService(NGECore core) {
 		this.core = core;
 		populateSkillCaps();
@@ -126,7 +128,6 @@ public class EntertainmentService implements INetworkDispatch {
 				if (sentPacket.getTargetId() != sentPacket.getDesignerId()) {
 					
 					if (sentPacket.isCustomerAccepted() && sentPacket.isDesignerCommited()) {
-						System.out.print("Both Accepted!");
 
 						sentPacket.setEndMessage(true);
 						
@@ -283,7 +284,8 @@ public class EntertainmentService implements INetworkDispatch {
 						buffRecipient.getClient().getSession().write(closeMessage.serialize());
 
 					}
-					if (sender.getObjectId() == buffRecipient.getObjectId()) {
+					if (sender.getObjectId() == buffRecipient.getObjectId()) 
+					{
 						// send close packet to buffer
 						BuffBuilderEndMessage end = new BuffBuilderEndMessage(sentPacket);
 						end.setObjectId(buffer.getObjectId());
@@ -295,6 +297,8 @@ public class EntertainmentService implements INetworkDispatch {
 						buffer.getClient().getSession().write(closeMessage.serialize());
 						CreatureObject cre = (CreatureObject) buffer;
 						cre.sendSystemMessage("The buff recipient cancelled the buff builder session.", (byte) 0);
+						
+					
 					}
 				}
 			}
@@ -535,24 +539,70 @@ public class EntertainmentService implements INetworkDispatch {
 	
 	public void giveInspirationBuff(CreatureObject reciever, CreatureObject buffer, Vector<BuffItem> buffVector) {
 		
+		
+		if (reciever.hasBuff("buildabuff_inspiration"))
+		{
+			core.buffService.removeBuffFromCreature(reciever, reciever.getBuffByName("buildabuff_inspiration"));
+		}
+		
 		Vector<BuffBuilder> availableStats = buffBuilderSkills;
 		Vector<BuffItem> stats = new Vector<BuffItem>();
 
-		for (BuffItem item : buffVector) {
-			for(BuffBuilder builder : availableStats) {
-				if(builder.getStatName().equalsIgnoreCase(item.getSkillName())) {
+		for (BuffItem item : buffVector) 
+		{
+			for(BuffBuilder builder : availableStats) 
+			{
+		
+				if(builder.getStatName().equalsIgnoreCase(item.getSkillName())) 
+				{
+				
+					
 					if(builder.getMaxTimesApplied() < item.getInvested())
 						return;
+
+					int affectTotal=0;
+							
+
 					
-					// Ent. Expertise Percent + (invested points * affect amount) = stat
-					int bonusPoints = (int) (builder.getAffectAmount() *((float) item.getEntertainerBonus()/100f));
-					int affectTotal = bonusPoints + (item.getInvested() * builder.getAffectAmount());
-
 					BuffItem stat = new BuffItem(builder.getStatAffects(), item.getInvested(), item.getEntertainerBonus());
-					stat.setAffectAmount(affectTotal);
+					
+					switch(builder.getCategoryId())
+					{
+					
+						case TRADE: 
+						case RESISTANCES:
+						case ATTRIBUTES:
+						{
+							affectTotal=(int)( ( (1+(float) item.getEntertainerBonus()/100f)*builder.getAffectAmount()) * item.getInvested());
+							break;
+						
+						}
+						case COMBAT:
+						{
+							affectTotal=(int) (( builder.getAffectAmount()+item.getEntertainerBonus()) * item.getInvested());
+							break;
+						
+						}
+						case MISC:
+						{
+							affectTotal=(int) (( builder.getAffectAmount()) * item.getInvested());
+							break;
+			
+						}
+						default:
+						{	
+							System.out.println("unhandled builder catId of "+builder.getCategoryId());
+						}
+						
+					}
 
+
+					stat.setAffectAmount(affectTotal);
 					stats.add(stat);
+					
+					break;
 				}
+				
 			}
 		}
 		
@@ -567,8 +617,7 @@ public class EntertainmentService implements INetworkDispatch {
 		//if (reciever.getAttachment("buffWorkshopTimestamp") != null)
 			//timeStamp = (long) reciever.getAttachment("buffWorkshopTimestamp");
 		
-		if (reciever.hasBuff("buildabuff_inspiration"))
-			core.buffService.removeBuffFromCreature(reciever, reciever.getBuffByName("buildabuff_inspiration"));
+
 		
 		core.buffService.addBuffToCreature(reciever, "buildabuff_inspiration", buffer);
 		/*if (core.buffService.addBuffToCreature(reciever, "buildabuff_inspiration", buffer) && !rPlayer.getProfession().equals("entertainer_1a")) {
@@ -649,22 +698,24 @@ public class EntertainmentService implements INetworkDispatch {
 	
 	public void startPerformanceExperience(final CreatureObject entertainer) {
 		final ScheduledFuture<?> experienceTask = scheduler.scheduleAtFixedRate(() -> {
-		
-			Performance p = performancesByIndex.get(entertainer.getPerformanceId());
-			if (p == null) {
+			try {
+				Performance p = performancesByIndex.get(entertainer.getPerformanceId());
+				if (p == null) {
+					entertainer.setFlourishCount(0);
+					return;
+				}
+				
+				int floXP = p.getFlourishXpMod();
+				int floCount = entertainer.getFlourishCount();
+				
+				//FIXME: this is not an accurate implementation yet. It needs group bonuses and other things.
+				int XP = (int) Math.round( ((floCount > 2) ? 2 : floCount) * floXP * 3.8 );
+				
 				entertainer.setFlourishCount(0);
-				return;
+				core.playerService.giveExperience(entertainer, XP);
+			} catch (Exception e) {
+				e.printStackTrace();
 			}
-			
-			int floXP = p.getFlourishXpMod();
-			int floCount = entertainer.getFlourishCount();
-			
-			//FIXME: this is not an accurate implementation yet. It needs group bonuses and other things.
-			int XP = (int) Math.round( ((floCount > 2) ? 2 : floCount) * floXP * 3.8 );
-			
-			entertainer.setFlourishCount(0);
-			core.playerService.giveExperience(entertainer, XP);
-			
 		}, 10000, 10000, TimeUnit.MILLISECONDS);
 		
 		entertainer.setEntertainerExperience(experienceTask);
@@ -682,29 +733,35 @@ public class EntertainmentService implements INetworkDispatch {
 
 		spectator.setPerformanceWatchee(performer);
 		performer.addSpectator(spectator);
-		spectator.setMoodAnimation("entertained");
+		//spectator.setMoodAnimation("entertained");
 
 		final ScheduledFuture<?> spectatorTask = scheduler.scheduleAtFixedRate(() -> {
-			
-			if (spectator.getPosition().getDistance2D(performer.getWorldPosition()) > (float) 70) {
-
-				if(((performer.getPerformanceType()) ? "dance" : "music").equals("dance")) {
-					spectator.setPerformanceWatchee(null);
-					spectator.sendSystemMessage("You stop watching " + performer.getCustomName() + " because " + performer.getCustomName()
-							+ " is out of range.", (byte) 0);
+			try {
+				if (spectator.getWorldPosition().getDistance2D(performer.getWorldPosition()) > (float) 70) {
+	
+					if(((performer.getPerformanceType()) ? "dance" : "music").equals("dance")) {
+						spectator.setPerformanceWatchee(null);
+						spectator.sendSystemMessage("You stop watching " + performer.getCustomName() + " because " + performer.getCustomName()
+								+ " is out of range.", (byte) 0);
+					}
+					else {
+						spectator.setPerformanceListenee(null);
+						spectator.sendSystemMessage("You stop listening to " + performer.getCustomName() + " because " + performer.getCustomName()
+								+ " is out of range.", (byte) 0);
+					}
+					//spectator.setMoodAnimation("neutral");
+					performer.removeSpectator(spectator);
+	
+					if (spectator.getInspirationTick() != null) 
+						spectator.getInspirationTick().cancel(true);
+					
+					if (spectator.getSpectatorTask() != null)
+						spectator.getSpectatorTask().cancel(true);
+					
 				}
-				else {
-					spectator.setPerformanceListenee(null);
-					spectator.sendSystemMessage("You stop listening to " + performer.getCustomName() + " because " + performer.getCustomName()
-							+ " is out of range.", (byte) 0);
-				}
-				spectator.setMoodAnimation("neutral");
-				performer.removeSpectator(spectator);
-
-				if (spectator.getInspirationTick().cancel(true))
-					spectator.getSpectatorTask().cancel(true);
+			} catch (Exception e) {
+				e.printStackTrace();
 			}
-
 		}, 2, 2, TimeUnit.SECONDS);
 
 		spectator.setSpectatorTask(spectatorTask);
@@ -742,8 +799,12 @@ public class EntertainmentService implements INetworkDispatch {
 		performer.doSkillAnimation(anmFlo);
 
 		scheduler.schedule(() -> {
-			performer.setFlourishCount(0);
-			performer.setPerformingFlourish(false);
+			try {
+				performer.setFlourishCount(0);
+				performer.setPerformingFlourish(false);
+			} catch (Exception e) {
+				e.printStackTrace();
+			}
 		}, (long) performance.getLoopDuration(), TimeUnit.SECONDS);
 	}
 	
@@ -786,7 +847,11 @@ public class EntertainmentService implements INetworkDispatch {
 			performer.playEffectObject(effect, "");
 		
 		scheduler.schedule(() -> {
-			performer.setPerformingEffect(false);
+			try {
+				performer.setPerformingEffect(false);
+			} catch (Exception e) {
+				e.printStackTrace();
+			}
 		}, (long) pEffect.getEffectDuration(), TimeUnit.SECONDS);
 
 		return true;
@@ -796,38 +861,40 @@ public class EntertainmentService implements INetworkDispatch {
 		// http://youtu.be/WqyAde-oC7o?t=11m14s  << Player watching entertainer (Has ring only, no pet, + 15 min ticks)
 		// TODO: Camp/Cantina checks for expertise and duration bonus %. Right now only using basic values.
 		final ScheduledFuture<?> inspirationTick = scheduler.scheduleAtFixedRate(() -> {
-
-			int time = 0; // current buff duration time (minutes)
-			int buffCap = 215; // 5 hours 35 minutes - 2 hours (buff duration increase bonus) << Taken from video, doesn't account for performance bonuses etc.
-
-			if (spectator.getAttachment("inspireDuration") != null)
-				time+= (int) spectator.getAttachment("inspireDuration");
-
-			if (performer.getSkillMod("expertise_en_inspire_buff_duration_increase") != null) {
-				SkillMod durationMod = performer.getSkillMod("expertise_en_inspire_buff_duration_increase");
-				buffCap += durationMod.getBase() + durationMod.getModifier();
-			}
-
-			if (time >= buffCap) {
-				spectator.setAttachment("inspireDuration", buffCap); // incase someone went over cap
-				spectator.getInspirationTick().cancel(true);
-			} else {
-				int entTick = 10;
-				if (performer.getSkillMod("expertise_en_inspire_pulse_duration_increase") != null) {
-					SkillMod pulseMod = performer.getSkillMod("expertise_en_inspire_pulse_duration_increase");
-					entTick += pulseMod.getBase() + pulseMod.getModifier();
+			try {
+				int time = 0; // current buff duration time (minutes)
+				int buffCap = 215; // 5 hours 35 minutes - 2 hours (buff duration increase bonus) << Taken from video, doesn't account for performance bonuses etc.
+	
+				if (spectator.getAttachment("inspireDuration") != null)
+					time+= (int) spectator.getAttachment("inspireDuration");
+	
+				if (performer.getSkillMod("expertise_en_inspire_buff_duration_increase") != null) {
+					SkillMod durationMod = performer.getSkillMod("expertise_en_inspire_buff_duration_increase");
+					buffCap += durationMod.getBase() + durationMod.getModifier();
 				}
-
-				int duration = (time + entTick); // minutes
-				int hMinutes = MathUtilities.secondsToHourMinutes(duration * 60);
-				int hours = MathUtilities.secondsToWholeHours(duration * 60);
-
-				spectator.showFlyText(OutOfBand.ProsePackage("@spam:buff_duration_tick_observer", "TO", hours + " hours , " + hMinutes + " minutes "), 0.66f, new RGB(255, 182, 193), 3, false);
-
-				spectator.setAttachment("inspireDuration", duration);
-				//System.out.println("Inspire Duration: " + spectator.getAttachment("inspireDuration") + " on " + spectator.getCustomName());
+	
+				if (time >= buffCap) {
+					spectator.setAttachment("inspireDuration", buffCap); // incase someone went over cap
+					spectator.getInspirationTick().cancel(true);
+				} else {
+					int entTick = 10;
+					if (performer.getSkillMod("expertise_en_inspire_pulse_duration_increase") != null) {
+						SkillMod pulseMod = performer.getSkillMod("expertise_en_inspire_pulse_duration_increase");
+						entTick += pulseMod.getBase() + pulseMod.getModifier();
+					}
+	
+					int duration = (time + entTick); // minutes
+					int hMinutes = MathUtilities.secondsToHourMinutes(duration * 60);
+					int hours = MathUtilities.secondsToWholeHours(duration * 60);
+	
+					spectator.showFlyText(OutOfBand.ProsePackage("@spam:buff_duration_tick_observer", "TO", hours + " hours , " + hMinutes + " minutes "), 0.66f, new RGB(255, 182, 193), 3, false);
+	
+					spectator.setAttachment("inspireDuration", duration);
+					//System.out.println("Inspire Duration: " + spectator.getAttachment("inspireDuration") + " on " + spectator.getCustomName());
+				}
+			} catch (Exception e) {
+				e.printStackTrace();
 			}
-			
 		}, 10, 10, TimeUnit.SECONDS);
 		spectator.setInspirationTick(inspirationTick);
 	}

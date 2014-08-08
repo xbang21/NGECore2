@@ -54,6 +54,7 @@ import resources.common.OutOfBand;
 import resources.objects.ObjectMessageBuilder;
 import resources.objects.SWGList;
 import resources.objects.SWGMap;
+import resources.objects.SWGSet;
 import engine.resources.common.CRC;
 import engine.resources.objects.SWGObject;
 import engine.resources.scene.Planet;
@@ -72,7 +73,7 @@ public class CreatureObject extends TangibleObject implements Serializable {
 	// CREO 1
 	private int bankCredits = 0;
 	private int cashCredits = 0;
-	private List<String> skills;
+	private SWGSet<String> skills;
 	@NotPersistent
 	private transient int skillsUpdateCounter = 0;
 	
@@ -95,8 +96,7 @@ public class CreatureObject extends TangibleObject implements Serializable {
 	private float turnRadius = 1;
 	private float walkSpeed = (float) 1.549;
 	private float waterModPercent = (float) 0.75;
-	private SWGList<String> abilities;
-	private int abilitiesUpdateCounter = 0;
+	private SWGMap<String, Integer> abilities;
 	private int xpBarValue = 0;
 	
 	private SWGMap<Long, Long> missionCriticalObjects;
@@ -184,14 +184,18 @@ public class CreatureObject extends TangibleObject implements Serializable {
 	private transient long tefTime = 0;
 	@NotPersistent
 	private transient SWGObject useTarget;
+	@NotPersistent
+	private transient CreatureObject calledPet;
+	
+	private byte locomotion = 0;
 	
 	public CreatureObject(long objectID, Planet planet, Point3D position, Quaternion orientation, String Template) {
 		super(objectID, planet, position, orientation, Template);
 		messageBuilder = new CreatureMessageBuilder(this);
 		loadTemplateData();
-		skills = new ArrayList<String>();
+		skills = new SWGSet<String>(this, 1, 4, false);
 		skillMods = new SWGMap<String, SkillMod>(this, 4, 3, true);
-		abilities = new SWGList<String>(this, 4, 14, true);
+		abilities = new SWGMap<String, Integer>(this, 4, 14, true);
 		missionCriticalObjects = new SWGMap<Long, Long>(this, 4, 13, false);
 		equipmentList = new SWGList<Long>(this, 6, 23, false);
 		buffList = new SWGList<Buff>(this, 6, 26, false);
@@ -278,6 +282,15 @@ public class CreatureObject extends TangibleObject implements Serializable {
 		}
 	}
 
+	public void deductCashCredits(int amountToDeduct) {
+		synchronized(objectMutex) {
+			this.cashCredits -= amountToDeduct;
+		}
+		if(getClient() != null && getClient().getSession() != null) {
+			getClient().getSession().write(messageBuilder.buildCashCreditsDelta(cashCredits));
+		}
+	}
+	
 	public void setCashCredits(int cashCredits) {
 		synchronized(objectMutex) {
 			this.cashCredits = cashCredits;
@@ -287,7 +300,7 @@ public class CreatureObject extends TangibleObject implements Serializable {
 		}
 	}
 
-	public List<String> getSkills() {
+	public SWGSet<String> getSkills() {
 		return skills;
 	}
 	
@@ -372,20 +385,80 @@ public class CreatureObject extends TangibleObject implements Serializable {
 
 	public void setPosture(byte posture) {
 		synchronized(objectMutex) {
-			if (this.posture == 0x09) {
+			switch (posture) {
+				case resources.datatables.Posture.Invalid:
+					locomotion = -1;
+					break;
+				case resources.datatables.Posture.Upright:
+					locomotion = 0;
+					break;
+				case resources.datatables.Posture.Crouched:
+					locomotion = 4;
+					break;
+				case resources.datatables.Posture.Prone:
+					locomotion = 7;
+					break;
+				case resources.datatables.Posture.Sneaking:
+					locomotion = 1;
+					break;
+				case resources.datatables.Posture.Blocking:
+					locomotion = 21;
+					break;
+				case resources.datatables.Posture.Climbing:
+					locomotion = 9;
+					break;
+				case resources.datatables.Posture.Flying:
+					locomotion = 12;
+					break;
+				case resources.datatables.Posture.LyingDown:
+					locomotion = 13;
+					break;
+				case resources.datatables.Posture.Sitting:
+					locomotion = 14;
+					break;
+				case resources.datatables.Posture.SkillAnimating:
+					locomotion = 15;
+					break;
+				case resources.datatables.Posture.DrivingVehicle:
+					locomotion = 16;
+					break;
+				case resources.datatables.Posture.RidingCreature:
+					locomotion = 17;
+					break;
+				case resources.datatables.Posture.KnockedDown:
+					locomotion = 18;
+					break;
+				case resources.datatables.Posture.Incapacitated:
+					locomotion = 19;
+					break;
+				case resources.datatables.Posture.Dead:
+					locomotion = 20;
+					break;
+			}
+		}
+		
+		synchronized(objectMutex) {
+			if (this.posture == resources.datatables.Posture.SkillAnimating) {
 				stopPerformance();
 			}
-			if(this.posture == posture)
+			
+			if (this.posture == posture) {
 				return;
+			}
+			
 			this.posture = posture;
 		}
-
-		Posture postureUpdate = new Posture(getObjectID(), posture);
-		ObjControllerMessage objController = new ObjControllerMessage(0x1B, postureUpdate);
 		
 		notifyObservers(messageBuilder.buildPostureDelta(posture), true);
-		notifyObservers(objController, true);
-		
+		notifyObservers(new ObjControllerMessage(0x1B, new Posture(getObjectID(), posture)), true);
+	}
+	
+	public byte getLocomotion() {
+		return locomotion;
+	}
+	
+	public void setLocomotion(byte locomotion) {
+		this.locomotion = locomotion;
 	}
 	
 	public void startPerformance() {
@@ -596,7 +669,7 @@ public class CreatureObject extends TangibleObject implements Serializable {
 	
 	public int getSkillModBase(String name) {
 		SkillMod skillMod = getSkillMod(name);
-		return ((skillMod == null) ? 0 : skillMod.getBase());
+		return ((skillMod == null) ? 0 : skillMod.getBase() + skillMod.getModifier());
 	}
 	
 	public int getSkillModModifier(String name) {
@@ -604,9 +677,9 @@ public class CreatureObject extends TangibleObject implements Serializable {
 		return ((skillMod == null) ? 0 : skillMod.getModifier());
 	}
 	
-	public float getSkillModValue(String name, int divisor) {
+	public float getSkillModValue(String name, int divisor, boolean percent) {
 		SkillMod skillMod = getSkillMod(name);
-		return ((skillMod == null) ? 0.0f : skillMod.getValue(divisor));
+		return ((skillMod == null) ? 0.0f : skillMod.getValue(divisor, percent));
 	}
 	
 	public float getSpeedMultiplierBase() {
@@ -715,60 +788,29 @@ public class CreatureObject extends TangibleObject implements Serializable {
 			this.waterModPercent = waterModPercent;
 		}
 	}
-
-	public SWGList<String> getAbilities() {
+	
+	public SWGMap<String, Integer> getAbilities() {
 		return abilities;
 	}
 	
 	public boolean hasAbility(String name) {
-		for (String ability : abilities) {
-			if (ability.equals(name)) {
-				return true;
-			}
-		}
-		
-		return false;
+		return abilities.containsKey(name);
 	}
-
-	public int getAbilitiesUpdateCounter() {
-		synchronized(objectMutex) {
-			return abilitiesUpdateCounter;
-		}
-	}
-
-	public void setAbilitiesUpdateCounter(int abilitiesUpdateCounter) {
-		synchronized(objectMutex) {
-			this.abilitiesUpdateCounter = abilitiesUpdateCounter;
-		}
-	}
-	
 	
 	public void addAbility(String abilityName) {
-		
-		if(abilities.contains(abilityName))
+		if (abilities.containsKey(abilityName)) {
 			return;
-		
-		abilities.add(abilityName);
-		
-		if(getClient() != null) {
-			setAbilitiesUpdateCounter((short) (getAbilitiesUpdateCounter() + 1));
-			getClient().getSession().write(messageBuilder.buildAddAbilityDelta(abilityName));
 		}
-
+		
+		abilities.put(abilityName, 1);
 	}
 	
 	public void removeAbility(String abilityName) {
-		
-		if(!abilities.contains(abilityName))
+		if (!abilities.containsKey(abilityName)) {
 			return;
-		
-		abilities.remove(abilityName);
-		
-		if(getClient() != null) {
-			setAbilitiesUpdateCounter((short) (getAbilitiesUpdateCounter() + 1));
-			getClient().getSession().write(messageBuilder.buildRemoveAbilityDelta(abilityName));
 		}
 		
+		abilities.remove(abilityName);
 	}
 	
 	public SWGMap<Long, Long> getMissionCriticalObjects() {
@@ -843,8 +885,8 @@ public class CreatureObject extends TangibleObject implements Serializable {
 		synchronized(objectMutex) {
 			this.moodAnimation = moodAnimation;
 		}
-		IoBuffer moodAnimationDelta = messageBuilder.buildMoodAnimationDelta(moodAnimation);
-		notifyObservers(moodAnimationDelta, true);
+		//IoBuffer moodAnimationDelta = messageBuilder.buildMoodAnimationDelta(moodAnimation);
+		//notifyObservers(moodAnimationDelta, true);
 	}
 
 	public long getWeaponId() {
@@ -940,7 +982,7 @@ public class CreatureObject extends TangibleObject implements Serializable {
 			return targetId;
 		}
 	}
-
+	
 	public void setIntendedTarget(long intendedTarget) {
 		synchronized(objectMutex) {
 			this.targetId = intendedTarget;
@@ -1003,7 +1045,12 @@ public class CreatureObject extends TangibleObject implements Serializable {
 		synchronized(objectMutex) {
 			this.performanceCounter = performanceCounter;
 		}
-		getClient().getSession().write(messageBuilder.buildPerformanceCounter(performanceCounter));
+		if (getClient() == null) System.err.println("setPerformanceCounter: client is null");
+		else if (getClient().getSession() == null) System.err.println("setPerformanceCounter: session is null");
+		else getClient().getSession().write(messageBuilder.buildPerformanceCounter(performanceCounter));
+		if (getClient() == null || getClient().getSession() == null) {
+			System.out.println("setPerformanceCounter: " + getTemplate());
+		}
 	}
 
 	public int getPerformanceId() {
@@ -1085,7 +1132,7 @@ public class CreatureObject extends TangibleObject implements Serializable {
 	public void sendBaselines(Client destination) {
 				
 		if(destination == null || destination.getSession() == null) {
-			System.out.println("NULL session");
+			//System.out.println("NULL session");
 			return;
 		}
 		
@@ -1793,6 +1840,15 @@ public class CreatureObject extends TangibleObject implements Serializable {
 						
 						break;
 					}
+					case 14: { 
+						buffer = messageBuilder.createDelta("CREO", (byte) 4, (short) 1, (byte) 14, buffer, buffer.array().length + 4);
+						
+						if (getClient() != null && getClient().getSession() != null) {
+							getClient().getSession().write(buffer);
+						}
+						
+						break;
+					}
 				}
 			}
 			case 1:
@@ -1806,4 +1862,21 @@ public class CreatureObject extends TangibleObject implements Serializable {
 		}
 	}
 	
+	public String getFirstName()
+	{
+		return getCustomName().split(" ")[0];
+	}
+	
+	public String getLastName()
+	{
+		return getCustomName().split(" ")[1];
+	}
+
+	public CreatureObject getCalledPet() {
+		return calledPet;
+	}
+
+	public void setCalledPet(CreatureObject calledPet) {
+		this.calledPet = calledPet;
+	}
 }

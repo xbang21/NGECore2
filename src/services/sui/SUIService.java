@@ -49,6 +49,7 @@ import resources.common.RadialOptions;
 import resources.loot.LootRollSession;
 import resources.objects.creature.CreatureObject;
 import resources.objects.harvester.HarvesterObject;
+import resources.objects.tangible.TangibleObject;
 import services.sui.SUIWindow.SUICallback;
 import services.sui.SUIWindow.Trigger;
 import engine.clients.Client;
@@ -81,8 +82,11 @@ public class SUIService implements INetworkDispatch {
 				SWGObject target = core.objectService.getObject(request.getTargetId());
 				SWGObject owner = core.objectService.getObject(request.getCharacterId());
 	
-				if(target == null || owner == null)
+				if(target == null || owner == null || owner.getClient() == null)
 					return;
+				
+//				if (getRadialFilename(target).equals("noradialoptions"))
+//					return;
 				
 				if (target instanceof HarvesterObject){
 					HarvesterObject harvester = (HarvesterObject) target;
@@ -133,20 +137,16 @@ public class SUIService implements INetworkDispatch {
 					//System.out.println("SUI target is NOT creatureobject " + target.getTemplate());
 				}
 				
-				if(target.getAttachment("isVendor") != null && (Boolean) target.getAttachment("isVendor") && ((CreatureObject) owner).getPlayerObject().getOwnedVendors().contains(target.getObjectID())) {
+				if(target.getAttachment("isVendor") != null && (Boolean) target.getAttachment("isVendor") && (long) target.getAttachment("vendorOwner") == owner.getObjectID()) {
 					core.scriptService.callScript("scripts/radial/", "terminal/vendor", "createRadial", core, owner, target, request.getRadialOptions());
 					sendRadial(owner, target, request.getRadialOptions(), request.getRadialCount());
 					return;
 				}
 				
-				if(target.getGrandparent() != null && target.getGrandparent().getAttachment("structureAdmins") != null)
-				{
-					if(core.housingService.getPermissions(owner, target.getContainer()) && !getRadialFilename(target).equals("structure/structure_management_terminal"))
-					{
-						core.scriptService.callScript("scripts/radial/", "structure/moveable", "createRadial", core, owner, target, request.getRadialOptions());
-						sendRadial(owner, target, request.getRadialOptions(), request.getRadialCount());
-						return;
-					}
+				if(core.housingService.getPermissions(owner, target.getContainer()) && (target.getAttachment("moveable") == null || (boolean) target.getAttachment("moveable") != false)) {
+					core.scriptService.callScript("scripts/radial/", "structure/moveable", "createRadial", core, owner, target, request.getRadialOptions());
+					sendRadial(owner, target, request.getRadialOptions(), request.getRadialCount());
+					return;
 				}
 				
 				core.scriptService.callScript("scripts/radial/", getRadialFilename(target), "createRadial", core, owner, target, request.getRadialOptions());
@@ -180,6 +180,16 @@ public class SUIService implements INetworkDispatch {
 				if(target == null || owner == null)
 					return;
 				
+				if(target.getAttachment("isVendor") != null && (Boolean) target.getAttachment("isVendor") && (long) target.getAttachment("vendorOwner") == owner.getObjectID()) {
+					core.scriptService.callScript("scripts/radial/", "terminal/vendor", "handleSelection", core, owner, target, objMenuSelect.getSelection());
+					return;
+				}
+				
+				if(core.housingService.getPermissions(owner, target.getContainer()) && (target.getAttachment("moveable") == null || (boolean) target.getAttachment("moveable") != false)) {
+						core.scriptService.callScript("scripts/radial/", "structure/moveable", "handleSelection", core, owner, target, objMenuSelect.getSelection());
+						return;
+				}
+
 				core.scriptService.callScript("scripts/radial/", getRadialFilename(target), "handleSelection", core, owner, target, objMenuSelect.getSelection());
 
 			}
@@ -187,7 +197,7 @@ public class SUIService implements INetworkDispatch {
 		});
 		
 		swgOpcodes.put(Opcodes.SuiEventNotification, new INetworkRemoteEvent() {
-
+			
 			@Override
 			public void handlePacket(IoSession session, IoBuffer data) throws Exception {
 				
@@ -213,7 +223,7 @@ public class SUIService implements INetworkDispatch {
 					return;
 
 				PyObject func = window.getFunctionByEventId(suiEvent.getEventType());
-				
+
 				if(func != null)
 					func.__call__(Py.java2py(owner), Py.java2py(window), Py.java2py(suiEvent.getEventType()), Py.java2py(suiEvent.getReturnList()));
 				
@@ -365,6 +375,12 @@ public class SUIService implements INetworkDispatch {
 		
 	}
 	
+	public SUIWindow createMessageBox(int type, String title, String promptText, SWGObject owner, SWGObject rangeObject, float maxDistance, SUICallback handleFunc) {
+		SUIWindow window = createMessageBox(type, title, promptText, owner, rangeObject, maxDistance);
+		window.addHandler(0, "", Trigger.TRIGGER_OK, new Vector<String>(), handleFunc);
+		return window;
+	}
+	
 	public SUIWindow createInputBox(int type, String title, String promptText, SWGObject owner, SWGObject rangeObject, float maxDistance) {
 		SUIWindow window = createSUIWindow("Script.inputBox", owner, rangeObject, maxDistance);
 		
@@ -414,6 +430,30 @@ public class SUIService implements INetworkDispatch {
 		returnParams.add("txtInput:LocalText");
 		window.addHandler(0, "", Trigger.TRIGGER_OK, returnParams, handleFunc);
 		return window;
+	}
+	
+	public void sendColorPicker(CreatureObject creature, TangibleObject target, String customizationType)
+	{
+		final SUIWindow suiWindow = core.suiService.createSUIWindow("Script.ColorPicker", creature, creature, 0);
+		
+		suiWindow.setProperty("bg.caption.lblTitle:Text", "@base_player:swg");
+		suiWindow.setProperty("ColorPicker:TargetRangeMax", "500");
+		suiWindow.setProperty("ColorPicker:TargetNetworkId", Long.toString(target.getObjectID()));
+		suiWindow.setProperty("ColorPicker:TargetVariable", customizationType);
+		
+		Vector<String> returnList = new Vector<String>();
+		returnList.add("ColorPicker:SelectedIndex");
+		
+		suiWindow.addHandler(0, "", Trigger.TRIGGER_OK, returnList, new SUICallback() 
+		{
+			public void process(SWGObject owner, int eventType, Vector<String> returnList) 
+			{
+				int index = Integer.parseInt(returnList.get(0));			
+				target.setCustomizationVariable(customizationType, (byte) index);
+			}
+		});
+		
+		core.suiService.openSUIWindow(suiWindow);	
 	}
 	
 	public void closeSUIWindow(SWGObject owner, int id) {

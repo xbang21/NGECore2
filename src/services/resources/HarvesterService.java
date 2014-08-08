@@ -131,6 +131,7 @@ public class HarvesterService implements INetworkDispatch {
 		
 		objControllerOpcodes.put(ObjControllerOpcodes.RESOURCE_EMPTY_HOPPER, new INetworkRemoteEvent() {
 			
+			@SuppressWarnings("unused")
 			@Override
 			public void handlePacket(IoSession session, IoBuffer data) throws Exception {
 				data.order(ByteOrder.LITTLE_ENDIAN);
@@ -175,7 +176,11 @@ public class HarvesterService implements INetworkDispatch {
 
 			@Override
 			public void run() {
-				ServiceProcessing();	
+				try {
+					ServiceProcessing();	
+				} catch (Exception e) {
+					e.printStackTrace();
+				}
 			}
 			
 		}, 10, 5000, TimeUnit.MILLISECONDS);
@@ -198,10 +203,10 @@ public class HarvesterService implements INetworkDispatch {
 				} catch (InterruptedException e1) {
 					System.err.println("InterruptedException IN HARVESTERSERVICE !!! " + e1.getMessage());
 				}
-	    		} catch (ExecutionException e2) {
-	    			System.err.println("EXCEPTION IN HARVESTERSERVICE !!! " + e2.getMessage());
-	    			System.err.println("EXCEPTION CAUSE : " + e2.getCause());
-	    		}
+	    	} catch (ExecutionException e2) {
+	    		System.err.println("EXCEPTION IN HARVESTERSERVICE !!! " + e2.getMessage());
+	    		System.err.println("EXCEPTION CAUSE : " + e2.getCause());
+	    	}
 	    }
 	  }
 	
@@ -692,45 +697,62 @@ public class HarvesterService implements INetworkDispatch {
 	
 	public void handlePermissionAdmin(CreatureObject owner, TangibleObject target) {
 		
-		String listName = "ADMIN";
+		String listName = "admin";
 		((HarvesterObject) target).setPermissionAdmin(listName,owner);
 	}
 	
 	public void handlePermissionHopper(CreatureObject owner, TangibleObject target) {
 		
-		String listName = "HOPPER";
+		String listName = "hopper";
 		((HarvesterObject) target).setPermissionHopper(listName,owner);
 	}
 	
 	public void handlePermissionListModify(CreatureObject crafter, SWGObject target, String commandArgs){
 		
 		String[] commandSplit = commandArgs.split(" ");
-		if (commandSplit.length==3){		
-			if (core.characterService.playerExists(commandSplit[2])){
-				if (commandSplit[2].equals("ADMIN")){
+		if (commandSplit.length >= 3) {		
+			if (core.characterService.playerExists(commandSplit[2])) {
+				SWGObject obj = core.objectService.getObject(core.characterService.getPlayerOID(commandSplit[2]));
+				if (commandSplit[2].equals("admin")){
 					Vector<String> adminList = ((HarvesterObject)target).getAdminList();
 					if (commandSplit[0].equals("add") && (!adminList.contains(commandSplit[2]))){					
 						crafter.sendSystemMessage(commandSplit[2] + " added as administrator", (byte) 0);
 						adminList.add(commandSplit[2]);
 						((HarvesterObject)target).setAdminList(adminList);
 					}
-					if (commandSplit[0].equals("remove") && (adminList.contains(commandSplit[2]))){					
+					if (commandSplit[0].equals("remove") && (adminList.contains(commandSplit[2]))){		
+						if(((HarvesterObject)target).getOwner() == obj.getObjectID()) {
+							crafter.sendSystemMessage("@player_structure:cannot_remove_owner", (byte) 0);
+							return;
+						}
+						if(crafter == obj) {
+							crafter.sendSystemMessage("@player_structure:cannot_remove_self", (byte) 0);
+							return;
+						}
 						crafter.sendSystemMessage(commandSplit[2] + " removed as administrator", (byte) 0);
 						adminList.remove(commandSplit[2]);
 						((HarvesterObject)target).setAdminList(adminList);
 					}
-				}
-				if (commandSplit[2].equals("HOPPER")){
-					Vector<String> hopperList = ((HarvesterObject)target).getHopperList();
-					if (commandSplit[0].equals("add") && (!hopperList.contains(commandSplit[2]))){					
-						crafter.sendSystemMessage(commandSplit[2] + " added as administrator", (byte) 0);
-						hopperList.add(commandSplit[2]);
-						((HarvesterObject)target).setHopperList(hopperList);
-					}
-					if (commandSplit[0].equals("remove") && (hopperList.contains(commandSplit[2]))){					
-						crafter.sendSystemMessage(commandSplit[2] + " removed as administrator", (byte) 0);
-						hopperList.remove(commandSplit[2]);
-						((HarvesterObject)target).setHopperList(hopperList);
+					if (commandSplit[2].equals("hopper")){
+						Vector<String> hopperList = ((HarvesterObject)target).getHopperList();
+						if (commandSplit[0].equals("add") && (!hopperList.contains(commandSplit[2]))){					
+							crafter.sendSystemMessage(commandSplit[2] + " added as administrator", (byte) 0);
+							hopperList.add(commandSplit[2]);
+							((HarvesterObject)target).setHopperList(hopperList);
+						}
+						if (commandSplit[0].equals("remove") && (hopperList.contains(commandSplit[2]))) {
+							if(((HarvesterObject)target).getOwner() == obj.getObjectID()) {
+								crafter.sendSystemMessage("@player_structure:cannot_remove_owner", (byte) 0);
+								return;
+							}
+							if(crafter == obj) {
+								crafter.sendSystemMessage("@player_structure:cannot_remove_self", (byte) 0);
+								return;
+							}
+							crafter.sendSystemMessage(commandSplit[2] + " removed as administrator", (byte) 0);
+							hopperList.remove(commandSplit[2]);
+							((HarvesterObject)target).setHopperList(hopperList);
+						}
 					}
 				}
 			} else {
@@ -884,6 +906,7 @@ public class HarvesterService implements INetworkDispatch {
 		owner.getClient().getSession().write(messenger.buildHINO7ExperimentalDelta2((HarvesterObject)target));
 	}
 		
+	@SuppressWarnings("unused")
 	public void updateHarvester(HarvesterObject harvester){
 		
 		CreatureObject owner = (CreatureObject)core.objectService.getObject(harvester.getOwner());
@@ -1015,8 +1038,8 @@ public class HarvesterService implements INetworkDispatch {
 		String structureTemplate = (String) object.getAttachment("StructureTemplate");
 		HarvesterObject harvester = (HarvesterObject) NGECore.getInstance().objectService.createObject(structureTemplate, actor.getPlanet());
 		Vector<String> adminList = harvester.getAdminList();
-		//String[] fullName = ((CreatureObject)actor).getCustomName().split(" ");
-		adminList.add(actor.getCustomName());
+		String[] fullName = ((CreatureObject)actor).getCustomName().split(" ");
+		adminList.add(fullName[0]);
 		// Set BER and outputhopper capacity here, take it from deed
 		harvester.setBER((int)object.getAttachment("Deed_BER"));
 		harvester.setSpecRate((int)(1.5F*(int)object.getAttachment("Deed_BER")));
@@ -1078,7 +1101,7 @@ public class HarvesterService implements INetworkDispatch {
 		String message = "Your construction is ready";
 		constructionNotificationMail.setMessage(message);
 		constructionNotificationMail.setStatus(Mail.NEW);
-		constructionNotificationMail.setAttachments(attachments);
+		constructionNotificationMail.setWaypointAttachments(attachments);
 		//NGECore.getInstance().chatService.sendPersistentMessage(actor.getClient(), constructionNotificationMail);
 		NGECore.getInstance().chatService.storePersistentMessage(constructionNotificationMail);
 		NGECore.getInstance().chatService.sendPersistentMessageHeader(actor.getClient(), constructionNotificationMail);

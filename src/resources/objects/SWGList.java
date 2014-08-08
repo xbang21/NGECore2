@@ -305,7 +305,6 @@ public class SWGList<E> implements List<E>, Serializable {
 		synchronized(objectMutex) {
 			if (valid(element)) {
 				E previousElement = list.set(index, element);
-				
 				queue(item(2, index, Baseline.toBytes(element), true, true));
 				
 				return previousElement;
@@ -317,7 +316,7 @@ public class SWGList<E> implements List<E>, Serializable {
 	
 	public boolean set(List<E> list) {
 		synchronized(objectMutex) {
-			byte[] newListData = { 0x03 };
+			byte[] newListData = { };
 			
 			if (!list.isEmpty()) {
 				for (E element : list) {
@@ -331,9 +330,17 @@ public class SWGList<E> implements List<E>, Serializable {
 					}
 				}
 				
+				IoBuffer buffer = Delta.createBuffer(3 + newListData.length);
+				buffer.put((byte) 3);
+				buffer.putShort((short) list.size());
+				buffer.put(newListData);
+				newListData = buffer.array();
+				
 				this.list = list;
 				
-				updateCounter++;
+				updateCounter += list.size();
+				//StringUtilities.printBytes(newListData);
+				//tools.CharonPacketUtils.printAnalysis(buffer,"SWGList set");
 				queue(newListData);
 					
 				return true;

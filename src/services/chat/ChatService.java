@@ -48,6 +48,7 @@ import engine.resources.service.INetworkDispatch;
 import engine.resources.service.INetworkRemoteEvent;
 import resources.common.*;
 import resources.datatables.DisplayType;
+import resources.guild.Guild;
 import resources.objects.creature.CreatureObject;
 import resources.objects.player.PlayerObject;
 import protocol.swg.AddIgnoreMessage;
@@ -221,6 +222,9 @@ public class ChatService implements INetworkDispatch {
 				
 				SWGObject recipient = getObjectByFirstName(firstName);				
 				
+				if (recipient == null || !recipient.isInQuadtree())
+					return;
+				
 				PlayerObject recipientGhost = (PlayerObject) recipient.getSlottedObject("ghost");
 				
 				if (recipientGhost.getIgnoreList().contains(sender.getCustomName().toLowerCase())) 
@@ -263,7 +267,37 @@ public class ChatService implements INetworkDispatch {
 				if(sender == null)
 					return;
 
-				SWGObject recipient = getObjectByFirstName(packet.getRecipient());
+				switch (packet.getRecipient()) {
+					case "citizens": break;
+					case "guild":
+						Guild guild = core.guildService.getGuildById(((CreatureObject) sender).getGuildId());
+						if (guild == null || !guild.getMembers().containsKey(sender.getObjectID())) {
+							ChatOnSendPersistentMessage response = new ChatOnSendPersistentMessage(4, packet.getCounter());
+							session.write(response.serialize());
+							return;
+						}
+						
+						if (!guild.getMember(sender.getObjectID()).hasMailPermission()) {
+							((CreatureObject) sender).sendSystemMessage("@guild:generic_fail_no_permission", (byte) 0);
+							ChatOnSendPersistentMessage response = new ChatOnSendPersistentMessage(4, packet.getCounter());
+							session.write(response.serialize());
+							return;
+						}
+						guild.sendGuildMail(sender.getCustomName(), packet.getSubject(), packet.getMessage());
+						
+						ChatOnSendPersistentMessage response = new ChatOnSendPersistentMessage(0, packet.getCounter());
+						session.write(response.serialize());
+						return;
+					case "group": break;
+					
+					default: break;
+					// TODO: Guild ranks
+				}
+
+				SWGObject recipient = core.objectService.getObjectByFirstName(packet.getRecipient());
+				
+				if (recipient == null)
+					return;
 				
 				PlayerObject recipientGhost = (PlayerObject) recipient.getSlottedObject("ghost");
 				
@@ -284,7 +318,7 @@ public class ChatService implements INetworkDispatch {
 					mail.setStatus(Mail.NEW);
 					mail.setSubject(packet.getSubject());
 					mail.setTimeStamp((int) (date.getTime() / 1000));
-					mail.setAttachments(packet.getWaypointAttachments());
+					mail.setWaypointAttachments(packet.getWaypointAttachments());
 					storePersistentMessage(mail);
 					
 					if(recipient.getClient() != null) {
@@ -324,7 +358,7 @@ public class ChatService implements INetworkDispatch {
 					return;
 
 				mail.setStatus(Mail.READ);
-				
+				mail.init();
 				sendPersistentMessage(client, mail);
 				
 				storePersistentMessage(mail);
@@ -507,7 +541,7 @@ public class ChatService implements INetworkDispatch {
 			
 			ChatRoom room = getChatRoomByAddress(sentPacket.getChannelAddress());
 			
-			leaveChatRoom((CreatureObject) obj, room.getRoomId());
+			leaveChatRoom((CreatureObject) obj, room.getRoomId(), true);
 			
 		});
 	}
@@ -661,7 +695,7 @@ public class ChatService implements INetworkDispatch {
 		//System.out.println(config.getString("GALAXY_NAME"));
 		
 		ChatPersistentMessageToClient msg = new ChatPersistentMessageToClient(mail.getSenderName(), config.getString("GALAXY_NAME"), mail.getMailId()
-				,(byte) 1, "", mail.getSubject(), mail.getStatus(), mail.getTimeStamp(), mail.getAttachments());
+				,(byte) 1, "", mail.getSubject(), mail.getStatus(), mail.getTimeStamp(), mail.getWaypointAttachments(), mail.getProseAttachments());
 		
 		client.getSession().write(msg.serialize());
 	}
@@ -680,7 +714,7 @@ public class ChatService implements INetworkDispatch {
 		//System.out.println(config.getString("GALAXY_NAME"));
 		
 		ChatPersistentMessageToClient msg = new ChatPersistentMessageToClient(mail.getSenderName(), config.getString("GALAXY_NAME"), mail.getMailId()
-				,(byte) 0, mail.getMessage(), mail.getSubject(), mail.getStatus(), mail.getTimeStamp(), mail.getAttachments());
+				,(byte) 0, mail.getMessage(), mail.getSubject(), mail.getStatus(), mail.getTimeStamp(), mail.getWaypointAttachments(), mail.getProseAttachments());
 		
 		client.getSession().write(msg.serialize());
 	}
@@ -719,25 +753,6 @@ public class ChatService implements INetworkDispatch {
 	@Override
 	public void shutdown() {
 		
-	}
-	
-	public SWGObject getObjectByFirstName(String name) {
-		ConcurrentHashMap<IoSession, Client> clients = core.getActiveConnectionsMap();
-		
-		if(name.contains(" "))
-			name = name.split(" ")[0];
-		
-		for(Client client : clients.values()) {
-			if(client.getParent() == null)
-				continue;
-			
-			String fullName = client.getParent().getCustomName();
-			String firstName = fullName.split(" ")[0];
-			
-			if(firstName.equalsIgnoreCase(name))
-				return client.getParent();
-		}
-		return null;
 	}
 	
 	public int generateMailId() {
@@ -941,7 +956,9 @@ public class ChatService implements INetworkDispatch {
 			}
 			
 			room.addUser(user.toLowerCase());
-			((CreatureObject) player).getPlayerObject().addChannel(roomId);
+			if (!((CreatureObject) player).getPlayerObject().isMemberOfChannel(roomId)) {
+				((CreatureObject) player).getPlayerObject().addChannel(roomId);
+			}
 			return true;
 		}
 		return false;
@@ -951,7 +968,7 @@ public class ChatService implements INetworkDispatch {
 		return joinChatRoom(user, roomId, false);
 	}
 	
-	public void leaveChatRoom(CreatureObject player, int roomId) {
+	public void leaveChatRoom(CreatureObject player, int roomId, boolean removeFromList) {
 		
 		ChatRoom room = getChatRoom(roomId);
 		if (room == null)
@@ -963,8 +980,11 @@ public class ChatService implements INetworkDispatch {
 			playerName = playerName.split(" ")[0];
 		
 		ChatOnEnteredRoom leaveRoom = new ChatOnEnteredRoom(playerName, 0, roomId, false);
-		player.getClient().getSession().write(leaveRoom.serialize());
-
+		
+		if (player != null && player.getClient() != null && player.getClient().getSession() != null) {
+			player.getClient().getSession().write(leaveRoom.serialize());
+		}
+		
 		room.getUserList().remove(playerName);
 		
 		room.getUserList().forEach(user -> {
@@ -975,7 +995,8 @@ public class ChatService implements INetworkDispatch {
 			}
 		});
 		
-		((PlayerObject) player.getSlottedObject("ghost")).removeChannel(roomId);
+		if (removeFromList)
+			((PlayerObject) player.getSlottedObject("ghost")).removeChannel((Integer) roomId);
 	}
 	
 	public void sendChatRoomMessage(CreatureObject sender, int roomId, int msgId, String message) {
@@ -988,6 +1009,9 @@ public class ChatService implements INetworkDispatch {
 		
 		if (senderName.contains(" "))
 			senderName = senderName.split(" ")[0];
+		
+		if (message.startsWith("\\#"))
+			message = " " + message;
 		
 		ChatOnSendRoomMessage onSend = new ChatOnSendRoomMessage(0, msgId);
 		sender.getClient().getSession().write(onSend.serialize());
@@ -1038,5 +1062,11 @@ public class ChatService implements INetworkDispatch {
 		
 		return message;
 	}
+	
+	@Deprecated
+	public SWGObject getObjectByFirstName(String name) {
+		return core.objectService.getObjectByFirstName(name);
+	}
+	
 	
 }

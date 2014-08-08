@@ -75,6 +75,7 @@ public class CharacterService implements INetworkDispatch {
 	private DatabaseConnection databaseConnection2;
 	private engine.resources.common.NameGen nameGenerator;
 	private static final String allowedCharsRegex = "['-]?[A-Za-z]('[a-zA-Z]|-[a-zA-Z]|[a-zA-Z])*['-]?$";
+	private static final String allowedCharsRegexWithSpace = "['-]?[A-Za-z]('[a-zA-Z]|-[a-zA-Z]|[a-zA-Z]| )*['-]?$";
 
 	public CharacterService(NGECore core) {
 
@@ -89,9 +90,13 @@ public class CharacterService implements INetworkDispatch {
 	}
 	
 	public boolean checkName(String name, Client client) {
+		return checkName(name, client, false);
+	}
+	
+	public boolean checkName(String name, Client client, boolean allowSpaces) {
 		// TODO: check for dev names, profane names, iconic names etc
 		try {
-			if(checkForDuplicateName(name, client.getAccountId()) || !name.matches(allowedCharsRegex))
+			if(checkForDuplicateName(name, client.getAccountId()) || (!allowSpaces && !name.matches(allowedCharsRegex)) || (allowSpaces && !name.matches(allowedCharsRegexWithSpace)))
 				return false;
 		} catch (SQLException e) {
 			e.printStackTrace();
@@ -228,6 +233,10 @@ public class CharacterService implements INetworkDispatch {
 				ClientCreateCharacter clientCreateCharacter = new ClientCreateCharacter();
 				clientCreateCharacter.deserialize(data);
 				
+				if (!Professions.isProfession(clientCreateCharacter.getProfession())) {
+					return;
+				}
+				
 				engine.resources.config.Config config = new engine.resources.config.Config();
 				config.setFilePath("nge.cfg");
 				if (!(config.loadConfigFile())) {
@@ -259,6 +268,7 @@ public class CharacterService implements INetworkDispatch {
 				object.setPosition(SpawnPoint.getRandomPosition(new Point3D(3528, 0, -4804), (float) 0.5, 3, core.terrainService.getPlanetByName("tatooine").getID()));
 				object.setCashCredits(100);
 				object.setBankCredits(1000);
+				object.setIncapTimer(10);
 				object.setOptionsBitmask(Options.ATTACKABLE);
 				//object.setPosition(new Point3D(0, 0, 0));
 				object.setOrientation(new Quaternion(1, 0, 0, 0));
@@ -287,6 +297,7 @@ public class CharacterService implements INetworkDispatch {
 				player.setProfession(clientCreateCharacter.getProfession());
 				player.setProfessionIcon(Professions.get(clientCreateCharacter.getProfession()));
 				player.setProfessionWheelPosition(clientCreateCharacter.getProfessionWheelPosition());
+				player.setNextUpdateTime(core.gcwService.calculateNextUpdateTime());
 				if(clientCreateCharacter.getHairObject().length() > 0) {
 					String sharedHairTemplate = clientCreateCharacter.getHairObject().replace("/hair_", "/shared_hair_");
 					TangibleObject hair = (TangibleObject) core.objectService.createObject(sharedHairTemplate, object.getPlanet());
@@ -296,8 +307,6 @@ public class CharacterService implements INetworkDispatch {
 					object.addObjectToEquipList(hair);
 				}
 				
-				player.setBornDate((int) System.currentTimeMillis());
-
 				TangibleObject inventory = (TangibleObject) core.objectService.createObject("object/tangible/inventory/shared_character_inventory.iff", object.getPlanet());
 				inventory.setContainerPermissions(CreatureContainerPermissions.CREATURE_CONTAINER_PERMISSIONS);
 				TangibleObject appInventory = (TangibleObject) core.objectService.createObject("object/tangible/inventory/shared_appearance_inventory.iff", object.getPlanet());
@@ -326,7 +335,7 @@ public class CharacterService implements INetworkDispatch {
 				
 				// TODO: Race abilities
 				object.addAbility("startDance");
-				object.addAbility("startDance+Basic");
+				object.addAbility("startDance+basic");
 				
 				object.addObjectToEquipList(datapad);
 				object.addObjectToEquipList(inventory);
@@ -549,9 +558,13 @@ public class CharacterService implements INetworkDispatch {
 	 */
 	public long getPlayerOID(String name) {
 		if (!name.equals("")) {
+			if (name.contains(" ")) {
+				name = name.split(" ")[0];
+			}
+			name = name.toLowerCase();
 			long oid = 0L;
 			try {
-				PreparedStatement ps = databaseConnection.preparedStatement("SELECT * FROM characters WHERE \"firstName\"=?");
+				PreparedStatement ps = databaseConnection.preparedStatement("SELECT * FROM characters WHERE LOWER(\"firstName\")=?");
 				ps.setString(1, name);
 				ResultSet resultSet = ps.executeQuery();
 				while (resultSet.next()) {	
